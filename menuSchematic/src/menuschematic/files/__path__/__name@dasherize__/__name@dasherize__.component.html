@@ -1,0 +1,5 @@
+<% if (sidebar) { %><div id="sidebar-menu"><%} else { %><ul id="top-menu"><% } %>
+    <a href="{{item.link}}" class="menu-item" *ngFor="let item of items">
+        {{item.name}}
+    </a>
+</ul>

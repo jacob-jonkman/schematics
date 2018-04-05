@@ -1,0 +1,9 @@
+{
+  "$schema": "./node_modules/@angular-devkit/schematics/collection-schema.json",
+  "schematics": {
+    "fix-fb-breaks": {
+      "description": "An example schematic",
+      "factory": "./fix-fb-breaks/index#fixBreakingChanges"
+    }
+  }
+}

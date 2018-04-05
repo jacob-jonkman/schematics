@@ -1,0 +1,10 @@
+{
+  "$schema": "../node_modules/@angular-devkit/menuschematic/collection-schema.json",
+  "schematics": {
+    "addbootstrap": {
+      "description": "A schematics for adding bootstrap to an Angular project.",
+      "factory": "./addbootstrap/index#addBootstrap",
+      "schema": "./addbootstrap/schema.json"
+    }
+  }
+}

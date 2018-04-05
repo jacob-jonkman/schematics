@@ -1,0 +1,26 @@
+{
+  "$schema": "http://json-schema.org/schema",
+  "id": "SchemanticsForAddBootstrap",
+  "title": "Add Bootstrap Schema",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "default": "app.module.ts"
+    },
+    "path": {
+      "type": "string",
+      "default": "app/"
+    },
+    "sourceDir": {
+      "type": "string",
+      "default": "src/"
+
+    },
+    "rootDirPath":  {
+      "type": "string",
+      "description": "The path to the root of the project to be modified.",
+      "default": "./"
+    }
+  }
+}

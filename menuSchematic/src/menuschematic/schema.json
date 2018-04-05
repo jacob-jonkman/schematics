@@ -1,0 +1,28 @@
+{
+  "$schema": "http://json-schema.org/schema",
+  "id": "SchemanticsForMenu",
+  "title": "Menu Schema",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "default": "name"
+    },
+    "path": {
+      "type": "string",
+      "default": ""
+    },
+    "sourceDir": {
+      "type": "string",
+       "default": "src"
+    },
+    "items": {
+      "type": "string",
+      "default": "Home"
+    },
+    "sidebar": {
+      "type": "boolean",
+      "default": false
+    }
+  }
+}

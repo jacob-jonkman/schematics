@@ -1,0 +1,10 @@
+{
+  "$schema": "../node_modules/@angular-devkit/menuschematic/collection-schema.json",
+  "schematics": {
+    "menu": {
+      "description": "A schematics for generating a menu.",
+      "factory": "./menuschematic/index#generateMenu",
+      "schema": "./menuschematic/schema.json"
+    }
+  }
+}
