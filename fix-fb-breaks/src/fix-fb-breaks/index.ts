@@ -51,6 +51,29 @@ function findImportAsName(nodes: ts.Node[], target: string, path: string): strin
     }
     return null;
 }
+
+function fixCrashlytics(fbNode: ts.Node, trigger: string, path: string): ReplaceChange|null {
+    let eventNode = findSuccessor(fbNode, [ts.SyntaxKind.PropertyAccessExpression, ts.SyntaxKind.Identifier]);
+    if(eventNode && trigger === 'crashlytics' && eventNode.getText() === 'onNewDetected') {
+        return new ReplaceChange(path, eventNode.pos, eventNode.getText(), 'onNew');
+    }
+    return null;
+}
+
+// Returns the trigger type of the event found in sourceNode. Can be database, firestore, auth, crashlytics or storage
+function getTriggerType(sourceNode: ts.Node, fbFunctionsImportName: string) {
+    let targetNode = findSuccessor(sourceNode, [
+        ts.SyntaxKind.PropertyAccessExpression,
+        ts.SyntaxKind.CallExpression,
+        ts.SyntaxKind.PropertyAccessExpression,
+        ts.SyntaxKind.PropertyAccessExpression
+    ]);
+
+    // Also check whether the functions import is included in targetNode
+    if(!targetNode || targetNode.getText().search(fbFunctionsImportName) === -1) return '';
+    return targetNode.getLastToken().getText();
+}
+
 function rewriteEvents(host: Tree, path: string) {
     let changes: Change[] = [];
 
@@ -69,14 +92,28 @@ function rewriteEvents(host: Tree, path: string) {
     }
 
     // Find occurrences of the onDelete, onCreate, onUpdate and onWrite functions
-    let firebaseFunctionNodes = callNodes.filter(node => node.getText().search(fbFunctionsImportName+'.*onDelete|onCreate|onUpdate|onWrite')>-1);
+    let firebaseFunctionNodes = callNodes.filter(node => node.getText().search(fbFunctionsImportName+'.*onDelete|onCreate|onUpdate|onWrite|onNewDetected')>-1);
     if(!firebaseFunctionNodes) {
         console.log('No events found in file: ' + path);
         return null;
     }
+
     // Iterate over these functions
     for (let fbNode of firebaseFunctionNodes) {
         if(!fbNode.parent) continue;
+
+        const trigger: string = getTriggerType(fbNode, fbFunctionsImportName);
+        console.log(trigger);
+        if(!(
+            trigger === 'database' ||
+            trigger === 'firestore' ||
+            trigger === 'auth' ||
+            trigger === 'crashlytics' ||
+            trigger === 'storage'
+        )) {
+            console.log(`${trigger} is not a valid trigger type.`);
+            continue;
+        }
 
         // Make sure function has a callback
         let arrowFunctionNode = findSuccessor(fbNode, [
@@ -88,6 +125,7 @@ function rewriteEvents(host: Tree, path: string) {
             console.log('No arrowFunctionNode found in file: ' + path);
             continue;
         }
+        console.log('arrowfunction gevonden');
 
         // Get the parameterlist to rename the event parameter
         let eventParamNode = findSuccessor(arrowFunctionNode, [
@@ -100,12 +138,22 @@ function rewriteEvents(host: Tree, path: string) {
             console.log('No eventParamNode found in file: ' + path);
             continue;
         }
+        console.log('eventParamNode gevonden. fulltext: ' + eventParamNode.getFullText());
+
         // Rewrite the event parameter. If the parameter list was not already between parentheses, they should be added
         // This can occur when only a single parameter was present
-        if(arrowFunctionNode.getChildren().find(n => n.kind == ts.SyntaxKind.OpenParenToken))
+        if(arrowFunctionNode.getChildren().find(n => n.kind == ts.SyntaxKind.OpenParenToken)) {
             changes.push(new ReplaceChange(path, eventParamNode.pos, 'event', 'data, context'));
-        else
+            console.log('wel parenthesis gevonden');
+        }
+        else {
             changes.push(new ReplaceChange(path, eventParamNode.pos, 'event', '(data, context)'));
+            console.log('geen parenthesis gevonden');
+        }
+
+        // onNewDetected event of Crashlytics was renamed to onNew
+        let change = fixCrashlytics(fbNode, trigger, path);
+        if(change) changes.push(change);
 
         // Find the body (=SyntaxList) of the callback
         let eventBlockNode: ts.Node|undefined|null = findSuccessor(arrowFunctionNode, [
@@ -115,13 +163,22 @@ function rewriteEvents(host: Tree, path: string) {
         );
         if(!eventBlockNode) continue; // Try next candidate
 
+        console.log('eventBlockNode gevonden');
+
         // Find usages of the event parameter and rewrite them
         let eventdataCandidates = eventBlockNode.getChildren().filter(n => n.getText().search('event') > -1);
+        let prevChange = false;
         for(let candidate of eventdataCandidates) {
             let assignmentCandidates = findNodes(candidate, ts.SyntaxKind.PropertyAccessExpression);
 
             // Construct the right change object
             for(let assignment of assignmentCandidates) {
+                //If parent is a PropertyAccessExpression and was already changed, skip this one
+                if(assignment.parent && assignment.parent.kind === ts.SyntaxKind.PropertyAccessExpression && prevChange) {
+                    //prevChange = false; //TODO: Misschien moet dit wel
+                    continue;
+                }
+                prevChange = false;
 
                 // If the parameter starts with a space, this should be added to the change object as well.
                 let spaceOrNoSpace = '';
@@ -129,28 +186,47 @@ function rewriteEvents(host: Tree, path: string) {
                     spaceOrNoSpace = ' ';
                 }
 
+                const nodeText = assignment.getText();
+
                 // Operation-specific changes
-                if(fbNode.getText().search(/onWrite|onUpdate/) > -1 && assignment.getText() === 'event.data.data') {
-                    changes.push(new ReplaceChange(path, assignment.pos, spaceOrNoSpace+'event.data.data', spaceOrNoSpace+'data.after.data'));
-                } else if(fbNode.getText().search(/onWrite|onUpdate/) > -1 && assignment.getText() === 'event.previous.data') {
-                    changes.push(new ReplaceChange(path, assignment.pos, spaceOrNoSpace+'event.previous.data()', spaceOrNoSpace+'data.before.data'));
-                } else if(fbNode.getText().search(/onDelete/) > -1 && assignment.getText() === 'event.data.previous.val') {
-                    changes.push(new ReplaceChange(path, assignment.pos, spaceOrNoSpace+'event.data.previous.val', spaceOrNoSpace+'data.val'));
+                if(fbNode.getText().search(/onWrite|onUpdate/) > -1
+                    && nodeText === 'event.data.data') {
+                        changes.push(new ReplaceChange(path, assignment.pos, spaceOrNoSpace+nodeText, spaceOrNoSpace+'data.after.data'));
+                        prevChange = true;
+                } else if(fbNode.getText().search(/onWrite|onUpdate/) > -1
+                    && nodeText === 'event.data.val'
+                    && (trigger === 'database' || trigger === 'firestore')) {
+                        changes.push(new ReplaceChange(path, assignment.pos, spaceOrNoSpace+nodeText, spaceOrNoSpace+'data.after.val'));
+                        prevChange = true;
+                } else if(fbNode.getText().search(/onWrite|onUpdate/) > -1
+                    && nodeText === 'event.data.previous.val'
+                    && (trigger === 'database' || trigger === 'firestore')) {
+                        changes.push(new ReplaceChange(path, assignment.pos, spaceOrNoSpace+nodeText, spaceOrNoSpace+'data.before.val'));
+                        prevChange = true;
+                } else if(fbNode.getText().search(/onDelete/) > -1
+                    && nodeText === 'event.data.previous.val'
+                    && (trigger === 'database')) {
+                        changes.push(new ReplaceChange(path, assignment.pos, spaceOrNoSpace+nodeText, spaceOrNoSpace+'data.val'));
+                        prevChange = true;
                 }
 
                 // Use of deprecated variable
-                else if(assignment.getText() === 'event.data.ref.parent') {
-                    //changes.push(new ReplaceChange(path, assignment.pos, spaceOrNoSpace+'event.data.ref.parent', spaceOrNoSpace+'event.data.ref.parent//TODO DIT IS NIET CORRECT MEER'));
-                    throw new SchematicsException(`Use of deprecated variable event.data.ref.parent was found in file ${path}. The use of this statement is too context sensitive so please remove it by hand.`);
+                else if(nodeText === 'event.data.ref.parent'
+                    && trigger === 'database') {
+                        //changes.push(new ReplaceChange(path, assignment.pos, spaceOrNoSpace+'event.data.ref.parent', spaceOrNoSpace+'event.data.ref.parent//TODO DIT IS NIET CORRECT MEER'));
+                        throw new SchematicsException(`Use of deprecated variable event.data.ref.parent was found in file ${path}. The use of this statement is too context sensitive so please remove it by hand.`);
                 }
 
                 // Simple variable rewriting
-                else if(assignment.getText() === 'event.data.adminRef.parent') {
-                    changes.push(new ReplaceChange(path, assignment.pos, spaceOrNoSpace+'event.data.adminRef.parent', spaceOrNoSpace+'data.ref.parent'));
-                } else if(assignment.getText() === 'event.data') {
-                    changes.push(new ReplaceChange(path, assignment.pos, spaceOrNoSpace+'event.data', spaceOrNoSpace+'data'));
-                } else if(assignment.getFullText() === ' event.params') {
-                    changes.push(new ReplaceChange(path, assignment.pos, spaceOrNoSpace+'event.params', spaceOrNoSpace+'context.params'));
+                else if(nodeText === 'event.data.adminRef.parent') {
+                    changes.push(new ReplaceChange(path, assignment.pos, spaceOrNoSpace+nodeText, spaceOrNoSpace+'data.ref.parent'));
+                    prevChange = true;
+                } else if(nodeText === 'event.data') {
+                    changes.push(new ReplaceChange(path, assignment.pos, spaceOrNoSpace+nodeText, spaceOrNoSpace+'data'));
+                    prevChange = true;
+                } else if(nodeText === 'event.params') {
+                    changes.push(new ReplaceChange(path, assignment.pos, spaceOrNoSpace+nodeText, spaceOrNoSpace+'context.params'));
+                    prevChange = true;
                 }
             }
         }
@@ -159,6 +235,8 @@ function rewriteEvents(host: Tree, path: string) {
 }
 
 function rewriteInitializeApp(host: Tree, path: string) {
+    if(path) return;
+
     let changes: Change[] = [];
 
     // Get the sourcefile, nodes and the name of the firebase-functions and firebase-admin imports
@@ -224,7 +302,7 @@ function applyChanges(host: Tree, changes: Change[], path: Path) {
         }
         // ReplaceChange first removes the old information and then inserts the new information on the same location
         else if (change instanceof ReplaceChange) {
-            console.log('ReplaceChange. pos: ' + change.pos + ' oldText: ' + change.oldText + 'newtext: ' + change.newText);
+            console.log('ReplaceChange. pos: ' + change.pos + ' oldText: ' + change.oldText + ' newtext: ' + change.newText);
             changeRecorder.remove(change.pos, change.oldText.length);
             changeRecorder.insertLeft(change.pos, change.newText);
         }
@@ -241,7 +319,6 @@ function findSuccessor(node: ts.Node, searchPath: ts.SyntaxKind[] ) {
     let next: ts.Node | undefined;
 
     for(let syntaxKind of searchPath) {
-        console.log(syntaxKind.toString());
         next = children.find(n => n.kind == syntaxKind);
         if (!next) return null;
         children = next.getChildren();
