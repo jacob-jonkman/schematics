@@ -52,9 +52,9 @@ function findImportAsName(nodes: ts.Node[], target: string, path: string): strin
     return null;
 }
 
-function fixCrashlytics(fbNode: ts.Node, trigger: string, path: string): ReplaceChange|null {
+function fixCrashlytics(fbNode: ts.Node, path: string): ReplaceChange|null {
     let eventNode = findSuccessor(fbNode, [ts.SyntaxKind.PropertyAccessExpression, ts.SyntaxKind.Identifier]);
-    if(eventNode && trigger === 'crashlytics' && eventNode.getText() === 'onNewDetected') {
+    if(eventNode && eventNode.getText() === 'onNewDetected') {
         return new ReplaceChange(path, eventNode.pos, eventNode.getText(), 'onNew');
     }
     return null;
@@ -152,8 +152,10 @@ function rewriteEvents(host: Tree, path: string) {
         }
 
         // onNewDetected event of Crashlytics was renamed to onNew
-        let change = fixCrashlytics(fbNode, trigger, path);
-        if(change) changes.push(change);
+        if(trigger === 'crashlytics') {
+            let change = fixCrashlytics(fbNode, path);
+            if (change) changes.push(change);
+        }
 
         // Find the body (=SyntaxList) of the callback
         let eventBlockNode: ts.Node|undefined|null = findSuccessor(arrowFunctionNode, [
@@ -187,6 +189,20 @@ function rewriteEvents(host: Tree, path: string) {
                 }
 
                 const nodeText = assignment.getText();
+
+                if(trigger === 'auth' && assignment.getText().search(/lastSignedInAt|createdAt/) > -1) {
+                    let identifierNode = assignment.getLastToken();
+                    if(identifierNode.kind === ts.SyntaxKind.Identifier) {
+                        if(identifierNode.getText() === 'lastSignedInAt') {
+                            changes.push(new ReplaceChange(path, identifierNode.pos, identifierNode.getText(), 'lastSignInTime'));
+                        }
+                        else if(identifierNode.getText() === 'createdAt') {
+                            changes.push(new ReplaceChange(path, identifierNode.pos, identifierNode.getText(), 'creationTime'));
+                        }
+
+                    }
+                    //if(assignment.)
+                }
 
                 // Operation-specific changes
                 if(fbNode.getText().search(/onWrite|onUpdate/) > -1
