@@ -250,9 +250,11 @@ function rewriteEvents(host: Tree, path: string) {
     applyChanges(host, changes, <Path>path);
 }
 
-function rewriteInitializeApp(host: Tree, path: string) {
-    if(path) return;
+// function getEventBlocks(nodes: ts.Node[], path: string, text?: string) {
+//
+// }
 
+function rewriteInitializeApp(host: Tree, path: string) {
     let changes: Change[] = [];
 
     // Get the sourcefile, nodes and the name of the firebase-functions and firebase-admin imports
@@ -269,7 +271,7 @@ function rewriteInitializeApp(host: Tree, path: string) {
         throw new SchematicsException('No syntaxlist found in ' + path);
     }
 
-    // Remove deprecated use of function.config().firebase as parameter in admin.initializeApp()
+    // Remove deprecated use of functions.config().firebase as parameter in admin.initializeApp()
     // First find a use of the initializeApp() function
     let expressionStatementNode = syntaxListNode.getChildren().find(n =>
         n.kind === ts.SyntaxKind.ExpressionStatement &&
@@ -294,15 +296,19 @@ function rewriteInitializeApp(host: Tree, path: string) {
     }
     changes.push(new RemoveChange(path, parametersNode.pos, parametersNode.getFullText()));
 
-    // Remove deprecated use of functions.config().firebase
-    let candidates = findNodes(syntaxListNode, ts.SyntaxKind.PropertyAccessExpression);
+    let candidates = nodes.filter(n => n.kind===ts.SyntaxKind.PropertyAccessExpression
+        && n.getText().search('initializeApp')===-1);
     for(let candidate of candidates) {
-        if(candidate.getText() === fbFunctionsImportName+'config().firebase'){
+        if(candidate.getText() === fbFunctionsImportName+'.config().firebase'){
+            // Do not change the initializeApp() function call
+            if(candidate.parent && candidate.parent.parent && candidate.parent.parent.getText().search('initializeApp')>-1) {
+                continue;
+            }
             let spaceOrNoSpace = '';
             if(candidate.getFullText()[0] === ' ') {
                 spaceOrNoSpace = ' ';
             }
-            changes.push(new ReplaceChange(path, candidate.pos, spaceOrNoSpace+fbFunctionsImportName+'.config().firebase', spaceOrNoSpace+'process.env.FIREBASE_CONFIG'));
+            changes.push(new ReplaceChange(path, candidate.pos, spaceOrNoSpace+fbFunctionsImportName+'.config().firebase', spaceOrNoSpace+'JSON.parse(process.env.FIREBASE_CONFIG)'));
         }
     }
 
@@ -349,10 +355,10 @@ function readDir(host: Tree, path: string, fileExtension: string) {
         if (fs.lstatSync(`${path}/${filename}`).isDirectory()) {
             readDir(host, `${path}/${filename}`, fileExtension);
         }
-        // Important: Run RewriteInitializeApp before RewriteEvents or this might break
+        // Important: Run rewriteEvents before rewriteInitializeApp or this might break
         else if (filename.endsWith(fileExtension)) {
-            rewriteInitializeApp(host, `${path}/${filename}`);
             rewriteEvents(host, `${path}/${filename}`);
+            rewriteInitializeApp(host, `${path}/${filename}`);
         }
     }
 }
