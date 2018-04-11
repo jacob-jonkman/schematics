@@ -1,18 +1,18 @@
 import * as functions from 'firebase-functions';
 import * as admin from 'firebase-admin';
 
-//admin.initializeApp(functions.config().firebase);
-//let firebaseConfig = JSON.parse(functions.config().firebase);
+admin.initializeApp(functions.config().firebase);
+const firebaseConfig = functions.config().firebase;
 
 // Database changes //
 exports.dbWrite = functions.database.ref('/path').onWrite(event => {
-    const beforeData = event.data.before.val(); // data before the write
-    const afterData = event.data.after.val(); // data after the write
+    const beforeData = event.data.previous.val(); // data before the write
+    const afterData = event.data.val(); // data after the write
 });
 
 exports.dbUpdate = functions.database.ref('/path').onUpdate(event => {
-    const beforeData = event.data.before.val(); // data before the update
-    const afterData = event.data.after.val(); // data after the update
+    const beforeData = event.data.previous.val(); // data before the update
+    const afterData = event.data.val(); // data after the update
 });
 
 exports.dbCreate = functions.database.ref('/path').onCreate(event => {
@@ -45,9 +45,21 @@ exports.dbDelete = functions.firestore.document('/path').onDelete((event) => {
 
 // Auth changes //
 exports.authAction = functions.auth.user().onCreate((event) => {
-    const creationTime = event.data.metadata.createdAt; // 2016-12-15T19:37:37.059Z
-    const lastSignInTime = event.data.metadata.lastSignedInAt; // 2018-01-03T16:23:12.051Z
-}
+    const creationTime = event.data.metadata.createdAt;
+    const lastSignInTime = event.data.metadata.lastSignedInAt;
+});
+
+exports.authAction2 = functions.auth.user().onCreate((event) => {
+    const userMetadata = event.data.metadata;
+    const creationTime = userMetadata.createdAt;
+    const lastSignInTime = userMetadata.lastSignedInAt;
+});
+
+// These variable names should not be changed
+exports.authAction2 = functions.auth.user().onCreate((event) => {
+    const createdAt = 'some date';
+    const lastSignedInAt = 'something else';
+});
 
 // Crashlytics //
 exports.newIssue = functions.crashlytics.issue().onNewDetected((event) => {
@@ -59,7 +71,20 @@ exports.newIssue = functions.crashlytics.issue().onNewDetected((event) => {
     const appPlatform = issue.appInfo.appPlatform;
     const latestAppVersion = issue.appInfo.latestAppVersion;
     const createTime = issue.createTime;
-}
+});
 
 // Storage //
-//TODO
+exports.processFile = functions.storage.object().onChange((event) => {
+    const object = event.data;
+    const filePath = object.name; // Path of the File
+    const contentType = object.contentType; // Mime type of the file
+
+    if (object.resourceState === 'not_exists') {
+        console.log('This file was deleted.');
+        return null;
+    }
+    if (object.resourceState === 'exists' && object.metageneration > 1) {
+        console.log('This is a metadata change event.');
+        return null;
+    }
+});

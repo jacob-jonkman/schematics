@@ -88,14 +88,14 @@ function rewriteEvents(host: Tree, path: string) {
     });
     let fbFunctionsImportName = findImportAsName(nodes, 'firebase-functions', path);
     if(!fbFunctionsImportName) {
-        return null;
+        return host;
     }
 
     // Find occurrences of the onDelete, onCreate, onUpdate and onWrite functions
-    let firebaseFunctionNodes = callNodes.filter(node => node.getText().search(fbFunctionsImportName+'.*onDelete|onCreate|onUpdate|onWrite|onNewDetected')>-1);
+    let firebaseFunctionNodes = callNodes.filter(node => node.getText().search(fbFunctionsImportName+'.*onDelete|onCreate|onUpdate|onWrite|onNewDetected|onFinalize')>-1);
     if(!firebaseFunctionNodes) {
         console.log('No events found in file: ' + path);
-        return null;
+        return host;
     }
 
     // Iterate over these functions
@@ -103,7 +103,6 @@ function rewriteEvents(host: Tree, path: string) {
         if(!fbNode.parent) continue;
 
         const trigger: string = getTriggerType(fbNode, fbFunctionsImportName);
-        console.log(trigger);
         if(!(
             trigger === 'database' ||
             trigger === 'firestore' ||
@@ -125,7 +124,6 @@ function rewriteEvents(host: Tree, path: string) {
             console.log('No arrowFunctionNode found in file: ' + path);
             continue;
         }
-        console.log('arrowfunction gevonden');
 
         // Get the parameterlist to rename the event parameter
         let eventParamNode = findSuccessor(arrowFunctionNode, [
@@ -138,7 +136,6 @@ function rewriteEvents(host: Tree, path: string) {
             console.log('No eventParamNode found in file: ' + path);
             continue;
         }
-        console.log('eventParamNode gevonden. fulltext: ' + eventParamNode.getFullText());
 
         // Rewrite the event parameter. If the parameter list was not already between parentheses, they should be added
         // This can occur when only a single parameter was present
@@ -164,8 +161,6 @@ function rewriteEvents(host: Tree, path: string) {
             ]
         );
         if(!eventBlockNode) continue; // Try next candidate
-
-        console.log('eventBlockNode gevonden');
 
         // Find usages of the event parameter and rewrite them
         let eventdataCandidates = eventBlockNode.getChildren().filter(n => n.getText().search('event') > -1);
@@ -248,11 +243,8 @@ function rewriteEvents(host: Tree, path: string) {
         }
     }
     applyChanges(host, changes, <Path>path);
+    return host;
 }
-
-// function getEventBlocks(nodes: ts.Node[], path: string, text?: string) {
-//
-// }
 
 function rewriteInitializeApp(host: Tree, path: string) {
     let changes: Change[] = [];
@@ -279,20 +271,20 @@ function rewriteInitializeApp(host: Tree, path: string) {
     );
     if(!expressionStatementNode) {
         console.log('No expressionStatementNode found in ' + path);
-        return null;
+        return host;
     }
     // Now get its function node
     let callExpressionNode = expressionStatementNode.getChildren().find(n => n.kind === ts.SyntaxKind.CallExpression);
     if(!callExpressionNode) {
         console.log('No callExpressionNode found in ' + path);
-        return null;
+        return host;
     }
 
     // If there is a parameter, it should be removed.
     let parametersNode = callExpressionNode.getChildren().find(n =>n.kind === ts.SyntaxKind.SyntaxList);
     if(!parametersNode) {
         console.log('No parameters node found in ' + path);
-        return null;
+        return host;
     }
     changes.push(new RemoveChange(path, parametersNode.pos, parametersNode.getFullText()));
 
@@ -313,6 +305,7 @@ function rewriteInitializeApp(host: Tree, path: string) {
     }
 
     applyChanges(host, changes, <Path>path);
+    return host;
 }
 
 function applyChanges(host: Tree, changes: Change[], path: Path) {
@@ -336,6 +329,8 @@ function applyChanges(host: Tree, changes: Change[], path: Path) {
     host.commitUpdate(changeRecorder);
 }
 
+// Recursively traverses the syntax tree downward searching for a specific list of nodetypes.
+// The function only traverses downward when a match is found.
 function findSuccessor(node: ts.Node, searchPath: ts.SyntaxKind[] ) {
     let children = node.getChildren();
     let next: ts.Node | undefined;
@@ -348,6 +343,96 @@ function findSuccessor(node: ts.Node, searchPath: ts.SyntaxKind[] ) {
     return next;
 }
 
+function findEventNodes(nodes: ts.Node[], fbFunctionsImportName: string, regex?: RegExp): ts.Node[] {
+    return nodes.filter(n =>
+           n.kind === ts.SyntaxKind.CallExpression
+        && n.getText().search(fbFunctionsImportName) > -1
+        && (regex === undefined || n.getText().search(regex) > -1)
+    );
+}
+
+// Traverses upwards through the syntaxtree looking for a parent node of type nodeType.
+// If a regex is given, it is also checked whether the parent node's text contains this regular expression.
+// This is done using the search() method, so an exact match is not required.
+// If no match is found, null is returned.
+function findParentNode(node: ts.Node, nodeType: ts.SyntaxKind, regex?: RegExp): ts.Node|null {
+    while(node.parent) {
+        if(node.parent.kind === nodeType && (!regex || node.parent.getText().search(regex) > -1)) {
+            return node.parent;
+        }
+        node = node.parent;
+    }
+    return null;
+}
+
+// Starting from the current node, recursively finds all childnodes that are of type nodeType.
+// If a regex is given, it is also checked whether the node's text contains this regular expression.
+// This is done using the search() method, so an exact match is not required.
+function findRecursiveChildNodes(node: ts.Node, nodeType: ts.SyntaxKind, regex?: RegExp): ts.Node[] {
+    let nodes: ts.Node[] = [];
+    node.getChildren().forEach(n => {
+        if(n.kind === nodeType && (!regex || n.getText().search(regex) > -1)) {
+            nodes.push(n);
+        }
+        findRecursiveChildNodes(n, nodeType, regex).forEach(c => nodes.push(c))
+    });
+    return nodes;
+}
+
+function rewriteStorageOnChangeEvent(host: Tree, path: string) {
+    let changes: Change[] = [];
+
+    // Get the sourcefile, nodes and the name of the firebase-functions and firebase-admin imports
+    const sourceFile = getSourceFile(path);
+    if(!sourceFile) {
+        throw new SchematicsException(`unknown sourcefile at ${path}`)
+    }
+    let nodes = getSourceNodes(sourceFile);
+    let fbFunctionsImportName = findImportAsName(nodes, 'firebase-functions', path);
+    if(!fbFunctionsImportName) {
+        return host;
+    }
+
+    // Find event callbacks of storage.object().onChange
+    let eventNodes = findEventNodes(nodes, fbFunctionsImportName, /storage.*onChange/);
+    for(let eventNode of eventNodes) {
+        // Change the name of the onChange event to onFinalize
+        let eventNameNode = findSuccessor(eventNode, [ts.SyntaxKind.PropertyAccessExpression, ts.SyntaxKind.Identifier]);
+        if(!eventNameNode) continue;
+        changes.push(new ReplaceChange(path, eventNameNode.pos, eventNameNode.getFullText(), 'onFinalize'));
+
+        // Find the ExpressionStatement of this event.
+        // This is where we will add new ExpressionStatements for the new event handlers.
+        let expressionStatementNode = findParentNode(eventNode, ts.SyntaxKind.ExpressionStatement, /onChange/);
+        if(!expressionStatementNode) continue;
+
+        // Now look for conditionals checking the resourceState property and extract their content to separate events.
+        let ifNodes = findRecursiveChildNodes(eventNode, ts.SyntaxKind.IfStatement); // TODO: Dit gaat goed met else if, ook met else?
+        for(let ifNode of ifNodes) {
+            let resourceStateCheck = findSuccessor(ifNode, [ts.SyntaxKind.BinaryExpression, ts.SyntaxKind.StringLiteral]);
+            if(resourceStateCheck && /exists|not_exists/.test(resourceStateCheck.getText())) {
+                let blockNode = findSuccessor(ifNode, [ts.SyntaxKind.Block, ts.SyntaxKind.SyntaxList]);
+                if(!blockNode) continue;
+
+                let toAdd = blockNode.getFullText();
+                let text = resourceStateCheck.getText();
+
+                // Depending on text, generate different functions
+                if(text === '\'not_exists\'') {
+                    toAdd = '\n\nexports.fileDeleted = functions.storage.object().onDelete((object, context) => {' + toAdd + '\n});';
+                } else if(text == '\'exists\'') {
+                    toAdd = '\n\nexports.metadataUpdated = functions.storage.object().onMetadataUpdate((object, context) => {' + toAdd + '\n});';
+                }
+                // Remove the ifstatement from the onChange function and insert a new expressionStatement node
+                changes.push(new RemoveChange(path, ifNode.pos, ifNode.getFullText()));
+                changes.push(new InsertChange(path, expressionStatementNode.end+1, toAdd));
+            }
+        }
+    }
+    applyChanges(host, changes, <Path>path);
+    return host;
+}
+
 function readDir(host: Tree, path: string, fileExtension: string) {
     console.log(path);
     let list = fs.readdirSync(path);
@@ -355,10 +440,12 @@ function readDir(host: Tree, path: string, fileExtension: string) {
         if (fs.lstatSync(`${path}/${filename}`).isDirectory()) {
             readDir(host, `${path}/${filename}`, fileExtension);
         }
-        // Important: Run rewriteEvents before rewriteInitializeApp or this might break
+        // Important: Run rewriteStorageOnChangeEvent before rewriteEvents and rewriteEvents before rewriteInitializeApp
+        // or this might break
         else if (filename.endsWith(fileExtension)) {
-            rewriteEvents(host, `${path}/${filename}`);
-            rewriteInitializeApp(host, `${path}/${filename}`);
+            host = rewriteStorageOnChangeEvent(host, `${path}/${filename}`);
+            host = rewriteEvents(host, `${path}/${filename}`);
+            host = rewriteInitializeApp(host, `${path}/${filename}`);
         }
     }
 }
