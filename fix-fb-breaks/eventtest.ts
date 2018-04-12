@@ -17,14 +17,11 @@ exports.dbUpdate = functions.database.ref('/path').onUpdate(event => {
 
 exports.dbCreate = functions.database.ref('/path').onCreate(event => {
     const createdData = event.data.val(); // data that was created
+    const parentRef = event.data.adminRef.parent; // The Database reference to the parent authorized with admin privileges.
 });
 
 exports.dbDelete = functions.database.ref('/path').onDelete(event => {
     const deletedData = event.data.val(); // data that was deleted
-});
-
-exports.dbCreate = functions.database.ref('/path/{uid}').onCreate((event) => {
-    const parentRef = event.data.adminRef.parent; // The Database reference to the parent authorized with admin privileges.
 });
 
 // Firestore changes //

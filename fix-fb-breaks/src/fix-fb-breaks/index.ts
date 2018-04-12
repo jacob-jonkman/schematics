@@ -92,7 +92,7 @@ function rewriteEvents(path: string): Change[] {
     }
 
     // Find occurrences of the onDelete, onCreate, onUpdate and onWrite functions
-    let firebaseFunctionNodes = callNodes.filter(node => node.getText().search(fbFunctionsImportName+'.*onDelete|onCreate|onUpdate|onWrite|onNewDetected|onFinalize')>-1);
+    let firebaseFunctionNodes = callNodes.filter(node => node.getText().search(fbFunctionsImportName+'.*onDelete|onCreate|onUpdate|onWrite|onNewDetected|onChange')>-1);
     if(!firebaseFunctionNodes) {
         console.log('No events found in file: ' + path);
         return changes;
@@ -404,8 +404,11 @@ function rewriteStorageOnChangeEvent(path: string): Change[] {
 
         // Now look for conditionals checking the resourceState property and extract their content to separate events.
         let ifNodes = findRecursiveChildNodes(eventNode, ts.SyntaxKind.IfStatement); // TODO: Dit gaat goed met else if, ook met else?
+        console.log(`er zijn ${ifNodes.length} ifNodes`);
         for(let ifNode of ifNodes) {
-            let resourceStateCheck = findSuccessor(ifNode, [ts.SyntaxKind.BinaryExpression, ts.SyntaxKind.StringLiteral]);
+            let resourceStateCheck = findSuccessor(ifNode, [ts.SyntaxKind.BinaryExpression/*, ts.SyntaxKind.StringLiteral*/]);
+            if(!resourceStateCheck) {console.log('resourceStateCheck is undefined!'); continue;}
+            console.log(`ResourceStateCheck: ${resourceStateCheck.getText()}`);
             if(resourceStateCheck && /exists|not_exists/.test(resourceStateCheck.getText())) {
                 let blockNode = findSuccessor(ifNode, [ts.SyntaxKind.Block, ts.SyntaxKind.SyntaxList]);
                 if(!blockNode) continue;
@@ -414,10 +417,14 @@ function rewriteStorageOnChangeEvent(path: string): Change[] {
                 let text = resourceStateCheck.getText();
 
                 // Depending on text, generate different functions
-                if(text === '\'not_exists\'') {
+                if(text.search('\'not_exists\'') > -1) {
                     toAdd = '\n\nexports.fileDeleted = functions.storage.object().onDelete((object, context) => {' + toAdd + '\n});';
-                } else if(text == '\'exists\'') {
+                    console.log('not_exists: '+text);
+                } else if(text.search('\'exists\'') > -1) {
                     toAdd = '\n\nexports.metadataUpdated = functions.storage.object().onMetadataUpdate((object, context) => {' + toAdd + '\n});';
+                    console.log('exists: '+text);
+                } else {
+                    console.log('iets anders: '+text);
                 }
                 // Remove the ifstatement from the onChange function and insert a new expressionStatement node
                 changes.push(new RemoveChange(path, ifNode.pos, ifNode.getFullText()));
@@ -441,8 +448,8 @@ function readDir(host: Tree, path: string, fileExtension: string) {
             let changes: Change[] = [];
 
             rewriteInitializeApp(`${path}/${filename}`).forEach(c => changes.push(c));
-            rewriteEvents(`${path}/${filename}`).forEach(c => changes.push(c));;
-            rewriteStorageOnChangeEvent(`${path}/${filename}`).forEach(c => changes.push(c));;
+            rewriteEvents(`${path}/${filename}`).forEach(c => changes.push(c));
+            rewriteStorageOnChangeEvent(`${path}/${filename}`).forEach(c => changes.push(c));
 
             applyChanges(host, changes, <Path>`${path}/${filename}`);
         }
