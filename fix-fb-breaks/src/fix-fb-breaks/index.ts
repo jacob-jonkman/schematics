@@ -1,10 +1,10 @@
-import {branchAndMerge, chain, Rule, SchematicContext, SchematicsException, Tree} from '@angular-devkit/schematics';
+import { branchAndMerge, chain, Rule, SchematicContext, SchematicsException, Tree } from '@angular-devkit/schematics';
 import * as fs from 'fs';
 import * as ts from 'typescript';
-import {Change, InsertChange, RemoveChange, ReplaceChange} from "../schematics-angular-utils/change";
-import {Path} from "typescript";
-import {findNodes, getSourceNodes} from "../schematics-angular-utils/ast-utils";
-import {FbBreaksOptions} from "./fbBreaksOptions";
+import { Change, InsertChange, RemoveChange, ReplaceChange } from "../schematics-angular-utils/change";
+import { Path} from "typescript";
+import { findNodes, getSourceNodes } from "../schematics-angular-utils/ast-utils";
+import { FbBreaksOptions } from "./fbBreaksOptions";
 
 // Loads the newest version of a source file so that previous writes are not forgotten
 function getSourceFile(path: string): ts.SourceFile|undefined {
@@ -74,6 +74,30 @@ function getTriggerType(sourceNode: ts.Node, fbFunctionsImportName: string) {
     return targetNode.getLastToken().getText();
 }
 
+// Look for variable assignments of searchString.
+// assignments should be nodes of type PropertyAccessExpression
+function findVariableDeclarations(assignments: ts.Node[],searchString: string): string[] {
+    let ret: string[] = [];
+
+    for( let assignment of assignments) {
+        if( assignment.kind != ts.SyntaxKind.PropertyAccessExpression) {
+            console.log('This is not a PropertyAccessExpression!');
+            continue;
+        }
+        if( assignment.getText().search(searchString) > -1 &&
+            assignment.parent &&
+            assignment.parent.kind === ts.SyntaxKind.VariableDeclaration
+        ) {
+            let node = assignment.parent.getChildren().find(n=>n.kind === ts.SyntaxKind.Identifier);
+            if( node ) {
+                ret.push(node.getText());
+                findVariableDeclarations(assignments, node.getText()).forEach(s => ret.push(s));
+            }
+        }
+    }
+    return ret;
+}
+
 function rewriteEvents(path: string): Change[] {
     let changes: Change[] = [];
 
@@ -141,11 +165,9 @@ function rewriteEvents(path: string): Change[] {
         // This can occur when only a single parameter was present
         if(arrowFunctionNode.getChildren().find(n => n.kind == ts.SyntaxKind.OpenParenToken)) {
             changes.push(new ReplaceChange(path, eventParamNode.pos, 'event', 'data, context'));
-            console.log('wel parenthesis gevonden');
         }
         else {
             changes.push(new ReplaceChange(path, eventParamNode.pos, 'event', '(data, context)'));
-            console.log('geen parenthesis gevonden');
         }
 
         // onNewDetected event of Crashlytics was renamed to onNew
@@ -163,10 +185,28 @@ function rewriteEvents(path: string): Change[] {
         if(!eventBlockNode) continue; // Try next candidate
 
         // Find usages of the event parameter and rewrite them
+        // TODO: Het probleem is dat niet altijd event erbij hoeft te staan...//
         let eventdataCandidates = eventBlockNode.getChildren().filter(n => n.getText().search('event') > -1);
         let prevChange = false;
         for(let candidate of eventdataCandidates) {
             let assignmentCandidates = findNodes(candidate, ts.SyntaxKind.PropertyAccessExpression);
+
+            const searchTerms = findVariableDeclarations(assignmentCandidates,'event');
+            searchTerms.forEach(s => console.log('searchterm found: ' + s));
+
+            //TODO: test!//
+            searchTerms.forEach(s => {
+                if(!eventBlockNode) return;
+                let eventdataCandidates = findRecursiveChildNodes(eventBlockNode, ts.SyntaxKind.PropertyAccessExpression, RegExp(s));
+                //let eventdataCandidates = eventBlockNode.getChildren().filter(n => n.getText().search(s) > -1);
+                eventdataCandidates.forEach(c => {
+                    console.log('c: ' + c.getText());
+                    assignmentCandidates.push(c);
+                    console.log('assignmentCandidates is nu zo lang: ' + assignmentCandidates.length);
+                });
+            });
+
+            console.log("we gaan nu de loops in");
 
             // Construct the right change object
             for(let assignment of assignmentCandidates) {
@@ -308,17 +348,17 @@ function applyChanges(host: Tree, changes: Change[], path: Path) {
     let changeRecorder = host.beginUpdate(path);
     for(let change of changes ) {
         if (change instanceof InsertChange) {
-            console.log('InsertChange. pos: ' + change.pos + ' newtext: ' + change.toAdd);
+            //console.log('InsertChange. pos: ' + change.pos + ' newtext: ' + change.toAdd);
             changeRecorder.insertLeft(change.pos, change.toAdd);
         }
         // ReplaceChange first removes the old information and then inserts the new information on the same location
         else if (change instanceof ReplaceChange) {
-            console.log('ReplaceChange. pos: ' + change.pos + ' oldText: ' + change.oldText + ' newtext: ' + change.newText);
+            //console.log('ReplaceChange. pos: ' + change.pos + ' oldText: ' + change.oldText + ' newtext: ' + change.newText);
             changeRecorder.remove(change.pos, change.oldText.length);
             changeRecorder.insertLeft(change.pos, change.newText);
         }
         else if (change instanceof RemoveChange) {
-            console.log('RemoveChange. pos: ' + change.pos + ' toRemove: ' + change.toRemove);
+            //console.log('RemoveChange. pos: ' + change.pos + ' toRemove: ' + change.toRemove);
             changeRecorder.remove(change.pos, change.toRemove.length);
         }
     }
@@ -404,11 +444,9 @@ function rewriteStorageOnChangeEvent(path: string): Change[] {
 
         // Now look for conditionals checking the resourceState property and extract their content to separate events.
         let ifNodes = findRecursiveChildNodes(eventNode, ts.SyntaxKind.IfStatement); // TODO: Dit gaat goed met else if, ook met else?
-        console.log(`er zijn ${ifNodes.length} ifNodes`);
         for(let ifNode of ifNodes) {
             let resourceStateCheck = findSuccessor(ifNode, [ts.SyntaxKind.BinaryExpression/*, ts.SyntaxKind.StringLiteral*/]);
             if(!resourceStateCheck) {console.log('resourceStateCheck is undefined!'); continue;}
-            console.log(`ResourceStateCheck: ${resourceStateCheck.getText()}`);
             if(resourceStateCheck && /exists|not_exists/.test(resourceStateCheck.getText())) {
                 let blockNode = findSuccessor(ifNode, [ts.SyntaxKind.Block, ts.SyntaxKind.SyntaxList]);
                 if(!blockNode) continue;
