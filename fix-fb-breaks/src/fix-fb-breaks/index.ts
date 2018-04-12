@@ -74,7 +74,7 @@ function getTriggerType(sourceNode: ts.Node, fbFunctionsImportName: string) {
     return targetNode.getLastToken().getText();
 }
 
-function rewriteEvents(host: Tree, path: string) {
+function rewriteEvents(path: string): Change[] {
     let changes: Change[] = [];
 
     // Get the sourcefile, nodes and the name of the firebase-functions import
@@ -88,14 +88,14 @@ function rewriteEvents(host: Tree, path: string) {
     });
     let fbFunctionsImportName = findImportAsName(nodes, 'firebase-functions', path);
     if(!fbFunctionsImportName) {
-        return host;
+        return changes;
     }
 
     // Find occurrences of the onDelete, onCreate, onUpdate and onWrite functions
     let firebaseFunctionNodes = callNodes.filter(node => node.getText().search(fbFunctionsImportName+'.*onDelete|onCreate|onUpdate|onWrite|onNewDetected|onFinalize')>-1);
     if(!firebaseFunctionNodes) {
         console.log('No events found in file: ' + path);
-        return host;
+        return changes;
     }
 
     // Iterate over these functions
@@ -196,7 +196,6 @@ function rewriteEvents(host: Tree, path: string) {
                         }
 
                     }
-                    //if(assignment.)
                 }
 
                 // Operation-specific changes
@@ -242,11 +241,10 @@ function rewriteEvents(host: Tree, path: string) {
             }
         }
     }
-    applyChanges(host, changes, <Path>path);
-    return host;
+    return changes;
 }
 
-function rewriteInitializeApp(host: Tree, path: string) {
+function rewriteInitializeApp(path: string): Change[] {
     let changes: Change[] = [];
 
     // Get the sourcefile, nodes and the name of the firebase-functions and firebase-admin imports
@@ -271,20 +269,20 @@ function rewriteInitializeApp(host: Tree, path: string) {
     );
     if(!expressionStatementNode) {
         console.log('No expressionStatementNode found in ' + path);
-        return host;
+        return changes;
     }
     // Now get its function node
     let callExpressionNode = expressionStatementNode.getChildren().find(n => n.kind === ts.SyntaxKind.CallExpression);
     if(!callExpressionNode) {
         console.log('No callExpressionNode found in ' + path);
-        return host;
+        return changes;
     }
 
     // If there is a parameter, it should be removed.
     let parametersNode = callExpressionNode.getChildren().find(n =>n.kind === ts.SyntaxKind.SyntaxList);
     if(!parametersNode) {
         console.log('No parameters node found in ' + path);
-        return host;
+        return changes;
     }
     changes.push(new RemoveChange(path, parametersNode.pos, parametersNode.getFullText()));
 
@@ -303,9 +301,7 @@ function rewriteInitializeApp(host: Tree, path: string) {
             changes.push(new ReplaceChange(path, candidate.pos, spaceOrNoSpace+fbFunctionsImportName+'.config().firebase', spaceOrNoSpace+'JSON.parse(process.env.FIREBASE_CONFIG)'));
         }
     }
-
-    applyChanges(host, changes, <Path>path);
-    return host;
+    return changes;
 }
 
 function applyChanges(host: Tree, changes: Change[], path: Path) {
@@ -379,7 +375,7 @@ function findRecursiveChildNodes(node: ts.Node, nodeType: ts.SyntaxKind, regex?:
     return nodes;
 }
 
-function rewriteStorageOnChangeEvent(host: Tree, path: string) {
+function rewriteStorageOnChangeEvent(path: string): Change[] {
     let changes: Change[] = [];
 
     // Get the sourcefile, nodes and the name of the firebase-functions and firebase-admin imports
@@ -390,7 +386,7 @@ function rewriteStorageOnChangeEvent(host: Tree, path: string) {
     let nodes = getSourceNodes(sourceFile);
     let fbFunctionsImportName = findImportAsName(nodes, 'firebase-functions', path);
     if(!fbFunctionsImportName) {
-        return host;
+        return changes;
     }
 
     // Find event callbacks of storage.object().onChange
@@ -429,8 +425,7 @@ function rewriteStorageOnChangeEvent(host: Tree, path: string) {
             }
         }
     }
-    applyChanges(host, changes, <Path>path);
-    return host;
+    return changes;
 }
 
 function readDir(host: Tree, path: string, fileExtension: string) {
@@ -440,17 +435,21 @@ function readDir(host: Tree, path: string, fileExtension: string) {
         if (fs.lstatSync(`${path}/${filename}`).isDirectory()) {
             readDir(host, `${path}/${filename}`, fileExtension);
         }
-        // Important: Run rewriteStorageOnChangeEvent before rewriteEvents and rewriteEvents before rewriteInitializeApp
-        // or this might break
+
+        // Build a changes array for this file and apply them one-by-one when finished
         else if (filename.endsWith(fileExtension)) {
-            host = rewriteStorageOnChangeEvent(host, `${path}/${filename}`);
-            host = rewriteEvents(host, `${path}/${filename}`);
-            host = rewriteInitializeApp(host, `${path}/${filename}`);
+            let changes: Change[] = [];
+
+            rewriteInitializeApp(`${path}/${filename}`).forEach(c => changes.push(c));
+            rewriteEvents(`${path}/${filename}`).forEach(c => changes.push(c));;
+            rewriteStorageOnChangeEvent(`${path}/${filename}`).forEach(c => changes.push(c));;
+
+            applyChanges(host, changes, <Path>`${path}/${filename}`);
         }
     }
 }
 
-function loopThroughFiles(path: string, _options: FbBreaksOptions): Rule {
+function loopThroughFiles(path: string): Rule {
     return (host: Tree) => {
         readDir(host, path, '.ts');
         return host;
@@ -461,7 +460,7 @@ export function fixBreakingChanges(options: FbBreaksOptions): Rule {
     return (tree: Tree, context: SchematicContext) => {
         const rule = chain([
             branchAndMerge(chain([
-                loopThroughFiles(options.filesPath, options)
+                loopThroughFiles(options.filesPath)
             ])),
         ]);
         return rule(tree, context);
