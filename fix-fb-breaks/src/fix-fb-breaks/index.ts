@@ -182,19 +182,17 @@ function rewriteEvents(path: string): Change[] {
 }
 
 function iterateOverAssignments(fbNode: ts.Node, assignmentCandidates: ts.Node[], trigger: string, eventParamName: string, eventParamNameToWrite: string, path: string): Change[] {
-    let prevChange = false;
+    let prevChangeEnd = -1;
     let changes: Change[] = [];
 
     // Construct the change objects
     for(let assignment of assignmentCandidates) {
         //If parent is a PropertyAccessExpression and was already changed, skip this one
-        if(assignment.parent && assignment.parent.kind === ts.SyntaxKind.PropertyAccessExpression && prevChange) {
-            prevChange = false;
+        if(assignment.parent && assignment.parent.kind === ts.SyntaxKind.PropertyAccessExpression && assignment.end <= prevChangeEnd) {
             continue;
         }
 
         const nodeText = assignment.getText();
-        prevChange = false;
 
         // If the parameter starts with a space, this should be added to the change object as well.
         let spaceOrNoSpace = '';
@@ -235,7 +233,7 @@ function iterateOverAssignments(fbNode: ts.Node, assignmentCandidates: ts.Node[]
                 spaceOrNoSpace+nodeText,
                 spaceOrNoSpace+changeString
             ));
-            prevChange = true;
+            prevChangeEnd = assignment.end;
         }
     }
     return changes;
