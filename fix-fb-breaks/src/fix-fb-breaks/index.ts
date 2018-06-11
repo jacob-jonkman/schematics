@@ -1,13 +1,13 @@
 import { chain, Rule, SchematicContext, SchematicsException, Tree } from '@angular-devkit/schematics';
 import { Change, InsertChange, RemoveChange, ReplaceChange } from "../schematics-angular-utils/change";
-import { Path} from "typescript";
 import { findNodes, getSourceNodes } from "../schematics-angular-utils/ast-utils";
 import { FbBreaksOptions } from "./fbBreaksOptions";
 import { Traversal } from "./traversal";
 import { Applier } from "./ChangeApplyer";
 import * as fs from 'fs';
 import * as ts from 'typescript';
-
+import * as utils from 'tsutils';
+//import * as tslint from 'tslint';
 const traversal = new Traversal();
 const applier = new Applier();
 
@@ -52,29 +52,6 @@ function getTriggerType(sourceNode: ts.Node, fbFunctionsImportName: string): str
     return '';
 }
 
-// Look for variable assignments of searchString.
-// assignments should be nodes of type PropertyAccessExpression
-function findVariableDeclarations(assignments: ts.Node[],searchString: string): string[] {
-    let matches: string[] = [];
-
-    for( let assignment of assignments) {
-        if( assignment.kind != ts.SyntaxKind.PropertyAccessExpression) {
-            continue;
-        }
-        if( assignment.getText().search(searchString) > -1 &&
-            assignment.parent &&
-            assignment.parent.kind === ts.SyntaxKind.VariableDeclaration
-        ) {
-            let node = assignment.parent.getChildren().find(n=>n.kind === ts.SyntaxKind.Identifier);
-            if( node ) {
-                matches.push(node.getText());
-                findVariableDeclarations(assignments, node.getText()).forEach(s => matches.push(s));
-            }
-        }
-    }
-    return matches;
-}
-
 function rewriteEvents(path: string): Change[] {
     let changes: Change[] = [];
 
@@ -84,6 +61,8 @@ function rewriteEvents(path: string): Change[] {
         throw new SchematicsException(`unknown sourcefile at ${path}`);
     }
     let nodes = getSourceNodes(sourceFile);
+    let varUsages = utils.collectVariableUsage(sourceFile);
+    varUsages.forEach(v => console.log('\n\nwow!',v));
     let callNodes = nodes.filter(n => {
         return n.kind === ts.SyntaxKind.CallExpression;
     });
@@ -159,23 +138,26 @@ function rewriteEvents(path: string): Change[] {
         );
         if(!eventBlockNode) continue; // Try next candidate
 
-        // Find usages of the event parameter so that they can be rewritten
+        // For each FirebaseFunction callback, find usages of the event parameter so that they can be rewritten
+        // eventdataCandidates are those childnodes of eventBlockNode which contain eventParamName
         let eventdataCandidates = eventBlockNode.getChildren().filter(n => n.getText().search(eventParamName) > -1);
         for(let candidate of eventdataCandidates) {
+
+            // Recursively find the childnode of candidate that  have type PropertyAccessExpression (should be one per candidate)
             let assignmentCandidates = findNodes(candidate, ts.SyntaxKind.PropertyAccessExpression);
 
-            const searchTerms = findVariableDeclarations(assignmentCandidates, eventParamName);
+            // Find variable assignments of eventParamName and also recursively find uses of these variable assignments
+            // const searchTerms = traversal.findVariableDeclarations(assignmentCandidates, eventParamName);
+            //
+            // searchTerms.forEach(s => {
+            //     console.log('found searchterm:', s.getText());
+            //     if(!eventBlockNode) return; // Just to please TSlint
+            //     let eventdataCandidates = traversal.findRecursiveChildNodes(eventBlockNode, ts.SyntaxKind.PropertyAccessExpression, RegExp(s.getText()));
+            //
+            //     eventdataCandidates.forEach(c => assignmentCandidates.push(c));
+            // });
 
-            searchTerms.forEach(s => {
-                if(!eventBlockNode) return;
-                let eventdataCandidates = traversal.findRecursiveChildNodes(eventBlockNode, ts.SyntaxKind.PropertyAccessExpression, RegExp(s));
-                eventdataCandidates.forEach(c => {
-                    assignmentCandidates.push(c);
-                });
-            });
-
-           iterateOverAssignments(fbNode, assignmentCandidates, trigger, eventParamName, eventParamNameToWrite, path)
-               .forEach(c => changes.push(c));
+            iterateOverAssignments(fbNode, assignmentCandidates, trigger, eventParamName, eventParamNameToWrite, path).forEach(c => changes.push(c));
         }
     }
     return changes;
@@ -205,11 +187,9 @@ function iterateOverAssignments(fbNode: ts.Node, assignmentCandidates: ts.Node[]
         // Trigger-specific changes
         if(trigger === 'database') {
             changeString = fixDatabaseEvents(fbNode, nodeText, path, eventParamName, eventParamNameToWrite);
-        }
-        else if (trigger === 'firestore') {
+        } else if (trigger === 'firestore') {
             changeString = fixFirestoreEvents(fbNode, nodeText, eventParamName, eventParamNameToWrite);
-        }
-        else if (trigger === 'auth') {
+        } else if (trigger === 'auth') {
             changeString = fixAuthEvents(nodeText, assignment, eventParamName);
         }
 
@@ -265,6 +245,7 @@ function fixFirestoreEvents(fbNode: ts.Node, nodeText: string, eventParamName: s
 
 // Contains the trigger-specific changes of Firebase Auth
 function fixAuthEvents(nodeText: string, assignmentNode: ts.Node, eventParamName: string): string {
+    //console.log(nodeText);
     if(nodeText.search(/lastSignedInAt|createdAt/) > -1) {
         let identifierNode = assignmentNode.getLastToken();
         if(identifierNode.kind === ts.SyntaxKind.Identifier) {
@@ -418,7 +399,7 @@ function readDir(path: string, fileExtension: string): Rule {
                 rewriteEvents(`${path}/${filename}`).forEach(c => changes.push(c));
                 rewriteStorageOnChangeEvent(`${path}/${filename}`).forEach(c => changes.push(c));
 
-                applier.applyChanges(host, changes, <Path>`${path}/${filename}`);
+                applier.applyChanges(host, changes, <ts.Path>`${path}/${filename}`);
             }
         }
         return host;

@@ -6,21 +6,21 @@ import { Change, InsertChange, RemoveChange, ReplaceChange } from "../schematics
 export class Applier {
     applyChanges(host: Tree, changes: Change[], path: Path) {
         let changeRecorder = host.beginUpdate(path);
-        if (changes.length > 1)
-            console.log('changes in ' + path);
+        // if (changes.length > 1)
+        //     console.log('changes in ' + path);
         for (let change of changes) {
             if (change instanceof InsertChange) {
-                console.log('InsertChange. pos: ' + change.pos + ' newtext: ' + change.toAdd);
+                //console.log('InsertChange. pos: ' + change.pos + ' newtext: ' + change.toAdd);
                 changeRecorder.insertLeft(change.pos, change.toAdd);
             }
             // ReplaceChange first removes the old information and then inserts the new information on the same location
             else if (change instanceof ReplaceChange) {
-                console.log('ReplaceChange. pos: ' + change.pos + ' oldText: ' + change.oldText + ' newtext: ' + change.newText);
+                //console.log('ReplaceChange. pos: ' + change.pos + ' oldText: ' + change.oldText + ' newtext: ' + change.newText);
                 changeRecorder.remove(change.pos, change.oldText.length);
                 changeRecorder.insertLeft(change.pos, change.newText);
             }
             else if (change instanceof RemoveChange) {
-                console.log('RemoveChange. pos: ' + change.pos + ' toRemove: ' + change.toRemove);
+                //console.log('RemoveChange. pos: ' + change.pos + ' toRemove: ' + change.toRemove);
                 changeRecorder.remove(change.pos, change.toRemove.length);
             }
         }
