@@ -1,13 +1,16 @@
 import { AstWalker } from "./AstWalker";
-import { Node, SyntaxKind } from 'typescript';
+//import * as ts from 'typescript';
+import { Node as tsNode, SyntaxKind} from 'typescript';
+import { tsquery } from '@phenomnomnominal/tsquery';
+import { TSQueryNode } from '@phenomnomnominal/tsquery/dist/src/tsquery-types';
 // import * as utils from 'tsutils';
 // import {isPropertyAccessExpression} from "typescript";
 
 export class Traversal {
-    astWalker(node: Node, walkerArray: AstWalker[]) {
-        let ret: Node[] = [];
+    astWalker(node: tsNode, walkerArray: AstWalker[]) {
+        let ret: tsNode[] = [];
         for (let walker of walkerArray) {
-            let nodes: Node[] = [];
+            let nodes: tsNode[] = [];
             if (walker.immediate) {
                 nodes = this.findImmediateChildNodes(node, walker.nodeType, walker.nodeText);
             } else {
@@ -31,15 +34,15 @@ export class Traversal {
     //     return usages;
     // }
 
-    findImmediateChildNodes(node: Node, nodeType: SyntaxKind, regex: RegExp): Node[] {
+    findImmediateChildNodes(node: tsNode, nodeType: SyntaxKind, regex: RegExp): tsNode[] {
         return node.getChildren().filter(n => this.nodeIsOfType(n, nodeType) && (regex === undefined || n.getText().search(regex)));
     }
 
     // Starting from the current node, recursively finds all childnodes that are of type nodeType.
     // If a regex is given, it is also checked whether the node's text contains this regular expression.
     // This is done using the search() method, so an exact match is not required.
-    findRecursiveChildNodes(node: Node, nodeType: SyntaxKind, regex?: RegExp): Node[] {
-        let nodes: Node[] = [];
+    findRecursiveChildNodes(node: tsNode, nodeType: SyntaxKind, regex?: RegExp): tsNode[] {
+        let nodes: tsNode[] = [];
         node.getChildren().forEach(n => {
             if (this.nodeIsOfType(n, nodeType) && (!regex || this.nodeContainsString(n, regex))) {
                 nodes.push(n);
@@ -51,12 +54,12 @@ export class Traversal {
 
     // Recursively traverses the syntax tree downward searching for a specific list of nodetypes.
     // The function only traverses downward when a match is found.
-    findSuccessor(node: Node, searchPath: SyntaxKind[]) {
+    findSuccessor(node: TSQueryNode, searchPath: SyntaxKind[]): TSQueryNode | null | undefined {
         let children = node.getChildren();
-        let next: Node | undefined;
+        let next;
 
         for (let syntaxKind of searchPath) {
-            next = children.find(n => this.nodeIsOfType(n, syntaxKind));
+            next = children.find(n => n.kind === syntaxKind) as TSQueryNode;
             if (!next) return null;
             children = next.getChildren();
         }
@@ -67,7 +70,7 @@ export class Traversal {
     // If a regex is given, it is also checked whether the parent node's text contains this regular expression.
     // This is done using the search() method, so an exact match is not required.
     // If no match is found, null is returned.
-    findParentNode(node: Node, nodeType: SyntaxKind, regex?: RegExp): Node | null {
+    findParentNode(node: tsNode, nodeType: SyntaxKind, regex?: RegExp): tsNode | null {
         while (node.parent) {
             if (this.nodeIsOfType(node.parent, nodeType) && (!regex || this.nodeContainsString(node.parent, regex))) {
                 return node.parent;
@@ -77,54 +80,13 @@ export class Traversal {
         return null;
     }
 
-    // Looks for an import statement of the form 'import <target> as <importName> from <path>'
-    // importName is returned
-    findImportAsName(nodes: Node[], target: string, _path: string): string | null {
-        let importNodes = nodes.filter(n => {
-            return this.nodeIsOfType(n, SyntaxKind.ImportDeclaration);
-        });
-        if (!importNodes) return null;
-        for (let importNode of importNodes) {
-            if (importNode.getFullText().search(target) > -1) {
-                let importNameNode = this.findSuccessor(importNode, [
-                    SyntaxKind.ImportClause,
-                    SyntaxKind.NamespaceImport,
-                    SyntaxKind.Identifier
-                ]);
-                if (!importNameNode) {
-                    return null;
-                }
-                return importNameNode.getText();
-            }
-        }
-        return null;
+    // Looks for an import statement of the form 'import <package> as <importName> from <importPath>'
+    // importName is returned if it exists
+    findImportAsName(ast: string, importPath: string): string| null {
+        const [importDeclaration] = tsquery(ast, `ImportDeclaration:has([text="${importPath}"])`);
+        return importDeclaration ? tsquery(importDeclaration, 'Identifier')[0].getText() : null;
     }
 
-    // Look for variable assignments of searchString.
-    // assignments should be nodes of type PropertyAccessExpression
-    // findVariableDeclarations(assignments: Node[], searchString: string): Node[] {
-        // console.log('findVariableDeclarations. Searching for:', searchString);
-        // let matches: Node[] = [];
-        // for( let assignment of assignments) {
-
-    //         if( !isPropertyAccessExpression(assignment)) {
-    //             console.log('ik ben een', assignment.kind.toString());
-    //             continue;
-    //         }
-
-    //        if( this.nodeContainsString(assignment, searchString) && assignment.parent && this.nodeIsOfType(assignment.parent, SyntaxKind.VariableDeclaration)) {
-    //             let node = assignment.parent.getChildren().find(n => this.nodeIsOfType(n, SyntaxKind.Identifier));
-    //             if( node ) {
-    //                 console.log('nieuwe match gevonden!', node.getText());
-    //                 matches.push(node);
-    //                 if(node.parent)
-    //                     this.findRecursiveVariableDeclarations(node.parent, node.getText()).forEach(s => matches.push(s));
-    //             }
-    //        }
-    //    }
-    //     // console.log(matches.length);
-    //    return matches;
-    //}
     //
     // findRecursiveVariableDeclarations(node: Node, searchString: string): Node[] {
     //     let returnNodes: Node[] = [];
@@ -142,10 +104,10 @@ export class Traversal {
     //     return returnNodes;
     // }
 
-    nodeIsOfType(node: Node, kind: SyntaxKind ) {
+    nodeIsOfType(node: tsNode, kind: SyntaxKind ): boolean {
         return node.kind === kind;
     }
-    nodeContainsString(node: Node, string: string|RegExp): boolean {
-        return node.getText().search(string) > -1
+    nodeContainsString(node: tsNode, string: string|RegExp): boolean {
+        return node.getText().search(string) > -1;
     }
 }
