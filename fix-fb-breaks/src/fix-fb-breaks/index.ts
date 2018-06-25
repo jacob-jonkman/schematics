@@ -1,15 +1,12 @@
 import { chain, Rule, SchematicContext, SchematicsException, Tree } from '@angular-devkit/schematics';
-import { Change, ReplaceChange } from "../schematics-angular-utils/change";
-import { FbBreaksOptions } from "./fbBreaksOptions";
-import { Traversal } from "./traversal";
-import { Applier } from "./ChangeApplyer";
+import { Change, ReplaceChange } from '../schematics-angular-utils/change';
+import { FbBreaksOptions } from './fbBreaksOptions';
 import { tsquery } from '@phenomnomnominal/tsquery';
 import { TSQueryNode } from '@phenomnomnominal/tsquery/dist/src/tsquery-types'
+import * as ts from 'typescript';
 import * as fs from 'fs';
-import { SyntaxKind, Path } from 'typescript';
-
-const traversal = new Traversal();
-const applier = new Applier();
+import * as applier from './ChangeApplyer';
+import * as traversal from './traversal';
 
 let changes: Change[] = []; // The list of changes which is passed to ChangeApplier
 
@@ -21,8 +18,8 @@ function getSourceFile(path: string): string {
 function fixCrashlytics(fbNode: TSQueryNode, path: string): void {
     if(!fbNode) return;
     let eventNode;
-    if(fbNode instanceof Node) {
-        eventNode = traversal.findSuccessor(fbNode, [SyntaxKind.PropertyAccessExpression, SyntaxKind.Identifier]);
+    if(fbNode) {
+        eventNode = traversal.findSuccessor(fbNode, [ts.SyntaxKind.PropertyAccessExpression, ts.SyntaxKind.Identifier]);
     }
     if(eventNode && eventNode.getText() === 'onNewDetected') {
         changes.push(new ReplaceChange(path, eventNode.pos, eventNode.getText(), 'onNew'));
@@ -31,74 +28,39 @@ function fixCrashlytics(fbNode: TSQueryNode, path: string): void {
 
 // Returns the trigger type of the event found in sourceNode. Can be database, firestore, auth, crashlytics or storage
 function getTriggerType(sourceNode: TSQueryNode, fbFunctionsImportName: string): string {
-    let targetNode = traversal.findSuccessor(sourceNode, [
-        SyntaxKind.PropertyAccessExpression,
-        SyntaxKind.CallExpression,
-        SyntaxKind.PropertyAccessExpression,
-        SyntaxKind.PropertyAccessExpression
-    ]);
-
-    // Also check whether the functions import is included in targetNode
-    if(targetNode && targetNode.getText().search(fbFunctionsImportName) !== -1) {
-        const triggertype = targetNode.getText();
-        if( triggertype === 'database' || 'firestore' || 'auth' || 'crashlytics' || 'storage') {
-            return targetNode.getLastToken().getText();
-        }
-    }
-    return '';
+    const [targetNode] = tsquery(sourceNode, `PropertyAccessExpression:has([text="${fbFunctionsImportName}"]) CallExpression PropertyAccessExpression PropertyAccessExpression`);
+    return targetNode ? targetNode.getText().split('.')[1] : '';
 }
 
 function rewriteEvents(path: string): void {
     // Get the sourcefile, nodes and the name of the firebase-functions import
-    console.log('rewriteEvent!');
-    const ast: string = getSourceFile(path);
-    console.log('ast gemaakt!');
-    let fbFunctionsImportName = traversal.findImportAsName(ast);// (nodes, 'firebase-functions', path);
+    const ast: ts.SourceFile = tsquery.ast(getSourceFile(path));
+    let fbFunctionsImportName = traversal.findImportAsName(ast, 'firebase-functions');
     if(!fbFunctionsImportName) {
         return;
     }
-    console.log('import gevonden!', fbFunctionsImportName);
 
-
-    let [...callNodes] = tsquery(ast, 'CallExpression');
-    console.log('callNodes!');
-
-
-    // Find occurrences of the onDelete, onCreate, onUpdate and onWrite functions
-    let firebaseFunctionNodes = callNodes.filter(node => node.getText().search(fbFunctionsImportName+'.*onDelete|onCreate|onUpdate|onWrite|onNewDetected|onChange')>-1);
-    if(!firebaseFunctionNodes) {
-        return;
-    }
+    let firebaseFunctionNodes: TSQueryNode[] = [];
+    tsquery(ast, `CallExpression:has([text="onCreate"])`).forEach(n => firebaseFunctionNodes.push(n));
+    tsquery(ast, `CallExpression:has([text="onWrite"])`).forEach(n => firebaseFunctionNodes.push(n));
+    tsquery(ast, `CallExpression:has([text="onUpdate"])`).forEach(n => firebaseFunctionNodes.push(n));
+    tsquery(ast, `CallExpression:has([text="onDelete"])`).forEach(n => firebaseFunctionNodes.push(n));
+    tsquery(ast, `CallExpression:has([text="onChange"])`).forEach(n => firebaseFunctionNodes.push(n));
+    tsquery(ast, `CallExpression:has([text="onNewDetected"])`).forEach(n => firebaseFunctionNodes.push(n));
 
     // Iterate over these functions
     for (let fbNode of firebaseFunctionNodes) {
-        if(!fbNode.parent) continue;
-
-        const trigger: string = getTriggerType(fbNode as TSQueryNode, fbFunctionsImportName);
-        if(trigger === '') {
-            continue;
-        }
+        const trigger: string = getTriggerType(fbNode, fbFunctionsImportName);
+        if(trigger === '') continue;
+        console.log('\ntrigger is:', trigger);
 
         // Make sure function has a callback
-        let arrowFunctionNode = traversal.findSuccessor(fbNode, [
-                SyntaxKind.SyntaxList,
-                SyntaxKind.ArrowFunction
-            ]
-        );
-        if (!arrowFunctionNode) {
-            continue;
-        }
+        let [arrowFunctionNode] = tsquery(fbNode, 'ArrowFunction');
+        if (!arrowFunctionNode) continue;
 
         // Get the parameterlist to rename the event parameter
-        let eventParamNode = traversal.findSuccessor(arrowFunctionNode, [
-                SyntaxKind.SyntaxList,
-                SyntaxKind.Parameter,
-                SyntaxKind.Identifier
-            ]
-        );
-        if (!eventParamNode) {
-            continue;
-        }
+        let [eventParamNode] = tsquery(arrowFunctionNode, 'Parameter Identifier');
+        if (!eventParamNode) continue;
 
         // Parse the name of the event's parameter for use in the rewriting stage.
         // If the parameter is called 'event', it should be changed to 'data', otherwise we use the given parameter name
@@ -108,12 +70,11 @@ function rewriteEvents(path: string): void {
             eventParamNameToWrite = 'data';
         }
 
+        console.log('we gaan', eventParamName, 'omschrijven naar', eventParamNameToWrite);
         // Rewrite the event parameter. If the parameter list was not already between parentheses, they should be added
-        // This can occur when only a single parameter was present
-        if(arrowFunctionNode.getChildren().find(n => n.kind === SyntaxKind.OpenParenToken)) {
+        if(arrowFunctionNode.getChildren().find(n => n.kind === ts.SyntaxKind.OpenParenToken)) {
             changes.push(new ReplaceChange(path, eventParamNode.pos, eventParamName, `${eventParamNameToWrite}, context`));
-        }
-        else {
+        } else {
             changes.push(new ReplaceChange(path, eventParamNode.pos, eventParamName, `(${eventParamNameToWrite}, context)`));
         }
 
@@ -121,47 +82,42 @@ function rewriteEvents(path: string): void {
         if(trigger === 'crashlytics') fixCrashlytics(fbNode, path);
 
         // Find the body (=SyntaxList) of the callback
-        let eventBlockNode = traversal.findSuccessor(arrowFunctionNode, [
-                SyntaxKind.Block,
-                SyntaxKind.SyntaxList
-            ]
-        );
-        if(!eventBlockNode) continue; // Try next candidate
+        let [eventBlockNode] = tsquery(arrowFunctionNode, 'Block');
+        if(!eventBlockNode) continue;
 
-        // For each FirebaseFunction callback, find usages of the event parameter so that they can be rewritten
-        // eventdataCandidates are those childnodes of eventBlockNode which contain eventParamName
-        let eventdataCandidates = eventBlockNode.getChildren().filter(n => n.getText().search(eventParamName) > -1);
-        for(let candidate of eventdataCandidates) {
+        let variableDeclarations = tsquery(eventBlockNode, `VariableStatement:has([text=${eventParamName}]) VariableDeclarationList VariableDeclaration`);
 
-            // Recursively find the childnode of candidate that have type PropertyAccessExpression (should be one per candidate)
-            let assignmentCandidates = tsquery(candidate, 'PropertyAccessExpression');
+        let variableStatements: TSQueryNode[] = [];
+        let variableNames: string[] = [];
+        variableDeclarations.forEach(v => {
+            const [identifier] = tsquery(v, 'Identifier');
+            console.log('var', identifier.getText());
+            if(identifier) variableNames.push(identifier.getText());
 
-            // Find variable assignments of eventParamName and also recursively find uses of these variable assignments
-            // const searchTerms = traversal.findVariableDeclarations(assignmentCandidates, eventParamName);
-            //
-            // searchTerms.forEach(s => {
-            //     console.log('found searchterm:', s.getText());
-            //     if(!eventBlockNode) return; // Just to please TSlint
-            //     let eventdataCandidates = traversal.findRecursiveChildNodes(eventBlockNode, ts.SyntaxKind.PropertyAccessExpression, RegExp(s.getText()));
-            //
-            //     eventdataCandidates.forEach(c => assignmentCandidates.push(c));
-            // });
+            let [callExpression] = tsquery(v,  'CallExpression PropertyAccessExpression');
+            if(callExpression) {
+                variableStatements.push(callExpression);
+            } else {
+                let [propertyAccessExpression] = tsquery(v, 'PropertyAccessExpression');
+                if(propertyAccessExpression) variableStatements.push(propertyAccessExpression);
+            }
 
-            iterateOverAssignments(fbNode, assignmentCandidates, trigger, eventParamName, eventParamNameToWrite, path);
-        }
+        });
+
+        // TODO: Recursively find uses of variables using variableNames //
+
+        //let expressionStatements = tsquery(eventBlockNode, 'ExpressionStatement CallExpression');
+        iterateOverAssignments(fbNode, variableStatements, trigger, eventParamName, eventParamNameToWrite, path);
     }
 }
 
-function iterateOverAssignments(fbNode: TSQueryNode, assignmentCandidates: TSQueryNode[], trigger: string, eventParamName: string, eventParamNameToWrite: string, path: string): void {
-    let prevChangeEnd = -1;
-
+function iterateOverAssignments(fbNode: TSQueryNode, variableStatements: ts.Node[], trigger: string, eventParamName: string, eventParamNameToWrite: string, path: string): void {
     // Construct the change objects
-    for(let assignment of assignmentCandidates) {
-        //If parent is a PropertyAccessExpression and was already changed, skip this one
-        if(assignment.parent && assignment.parent.kind === SyntaxKind.PropertyAccessExpression && assignment.end <= prevChangeEnd) {
-            continue;
+    variableStatements.forEach(assignment => {
+        if(!assignment) {
+            console.log('assignment null');
+            return;
         }
-
         const nodeText = assignment.getText();
 
         // If the parameter starts with a space, this should be added to the change object as well.
@@ -201,17 +157,19 @@ function iterateOverAssignments(fbNode: TSQueryNode, assignmentCandidates: TSQue
                 spaceOrNoSpace+nodeText,
                 spaceOrNoSpace+changeString
             ));
-            prevChangeEnd = assignment.end;
         }
-    }
+    });
 }
 
 // Contains the trigger-specific changes of Firebase Realtime Database
 function fixDatabaseEvents(fbNode: TSQueryNode, nodeText: string, path: string, eventParamName: string, eventParamNameToWrite: string): string {
+    console.log('nodeText:', nodeText, 'eventParamName:', eventParamName);
     if(fbNode.getText().search(/onWrite|onUpdate/) > -1 && nodeText === `${eventParamName}.data.val`) {
         return `${eventParamNameToWrite}.after.val`;
     } else if(fbNode.getText().search(/onWrite|onUpdate/) > -1 && nodeText === `${eventParamName}.data.previous.val`) {
         return `${eventParamNameToWrite}.before.val`;
+    } else if (fbNode.getText().search(/onCreate/) > -1 && nodeText === `${eventParamName}.data.val`){
+        return `${eventParamNameToWrite}.val`;
     } else if(fbNode.getText().search(/onDelete/) > -1 && nodeText === `${eventParamName}.data.previous.val`) {
         return `${eventParamNameToWrite}.val`;
     } else if(nodeText === `${eventParamName}.data.ref.parent`) {
@@ -222,20 +180,23 @@ function fixDatabaseEvents(fbNode: TSQueryNode, nodeText: string, path: string, 
 
 // Contains the trigger-specific changes of Firebase Firestore
 function fixFirestoreEvents(fbNode: TSQueryNode, nodeText: string, eventParamName: string, eventParamNameToWrite: string): string {
-    if(fbNode.getText().search(/onWrite|onUpdate/) > -1 && nodeText === `${eventParamName}.data`) {
-        return nodeText.replace(`${eventParamName}.data`, `${eventParamNameToWrite}.after.data`);
+    if(fbNode.getText().search(/onWrite|onUpdate/) > -1 && nodeText === `${eventParamName}.data.data`) {
+        return `${eventParamNameToWrite}.after.data`;
+        //return nodeText.replace(`${eventParamName}.data`, `${eventParamNameToWrite}.after.data`);
     } else if(fbNode.getText().search(/onWrite|onUpdate/) > -1 && nodeText === `${eventParamName}.data.previous.data`) {
         return nodeText.replace(`${eventParamName}.data.previous.data`, `${eventParamNameToWrite}.before.data`);//.replace(`${eventParamName}.`, '');
+    } else if(fbNode.getText().search(/onCreate|onDelete/) > -1 && nodeText === `${eventParamName}.data.previous.data`) {
+        return `${eventParamNameToWrite}.data`;
     }
     return '';
 }
 
 // Contains the trigger-specific changes of Firebase Auth
-function fixAuthEvents(nodeText: string, assignmentNode: TSQueryNode, eventParamName: string): string {
+function fixAuthEvents(nodeText: string, assignmentNode: ts.Node, eventParamName: string): string {
     //console.log(nodeText);
     if(nodeText.search(/lastSignedInAt|createdAt/) > -1) {
         let identifierNode = assignmentNode.getLastToken();
-        if(identifierNode.kind === SyntaxKind.Identifier) {
+        if(identifierNode.kind === ts.SyntaxKind.Identifier) {
             if(identifierNode.getText() === 'lastSignedInAt') {
                 return nodeText.replace('lastSignedInAt','lastSignInTime').replace(`${eventParamName}.`, '');
             }
@@ -379,7 +340,7 @@ function readDir(path: string, fileExtension: string): Rule {
                 rewriteEvents(`${path}/${filename}`);
                 // rewriteStorageOnChangeEvent(`${path}/${filename}`);
 
-                applier.applyChanges(host, changes, <Path>`${path}/${filename}`);
+                applier.applyChanges(host, changes, <ts.Path>`${path}/${filename}`);
             }
         }
         return host;
@@ -387,7 +348,6 @@ function readDir(path: string, fileExtension: string): Rule {
 }
 
 export function fixBreakingChanges(options: FbBreaksOptions): Rule {
-    console.log('doen we wel ietss?');
     return (tree: Tree, context: SchematicContext) => {
         const rule = chain([
             readDir(options.filesPath, '.ts')

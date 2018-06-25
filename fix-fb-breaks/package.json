@@ -15,10 +15,13 @@
   "dependencies": {
     "@angular-devkit/core": "^0.3.2",
     "@angular-devkit/schematics": "^0.3.2",
+    "@phenomnomnominal/tsquery": "^2.0.0-beta.4",
     "@types/jasmine": "^2.6.0",
     "@types/node": "^8.0.31",
     "g": "^2.0.1",
+    "hoek": "^5.0.3",
     "jasmine": "^2.8.0",
+    "tsc": "^1.20150623.0",
     "typescript": "^2.9.2"
   },
   "devDependencies": {
