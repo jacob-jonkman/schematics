@@ -1,5 +1,5 @@
 import { chain, Rule, SchematicContext, SchematicsException, Tree } from '@angular-devkit/schematics';
-import { Change, ReplaceChange } from '../schematics-angular-utils/change';
+import { Change, ReplaceChange, RemoveChange } from '../schematics-angular-utils/change';
 import { FbBreaksOptions } from './fbBreaksOptions';
 import { tsquery } from '@phenomnomnominal/tsquery';
 import { TSQueryNode } from '@phenomnomnominal/tsquery/dist/src/tsquery-types'
@@ -208,70 +208,47 @@ function fixAuthEvents(nodeText: string, assignmentNode: ts.Node, eventParamName
     return '';
 }
 
-// function rewriteInitializeApp(path: string): void {
-//     // Get the sourcefile, nodes and the name of the firebase-functions and firebase-admin imports
-//     const sourceFile = getSourceFile(path);
-//     if(!sourceFile) {
-//         throw new SchematicsException(`unknown sourcefile at ${path}`)
-//     }
-//     let nodes = getSourceNodes(sourceFile);
-//     let fbFunctionsImportName = traversal.findImportAsName(nodes, 'firebase-functions', path);
-//     let fbAdminImportName = traversal.findImportAsName(nodes, 'firebase-admin', path);
-//
-//     let syntaxListNode = nodes.find(n => n.kind === ts.SyntaxKind.SyntaxList);
-//     if(!syntaxListNode) {
-//         throw new SchematicsException('No syntaxlist found in ' + path);
-//     }
-//
-//     // Remove deprecated use of functions.config().firebase as parameter in admin.initializeApp()
-//     // First find a use of the initializeApp() function
-//     let expressionStatementNode = syntaxListNode.getChildren().find(n =>
-//         n.kind === ts.SyntaxKind.ExpressionStatement &&
-//         n.getText().search(fbAdminImportName+'.initializeApp') > -1
-//     );
-//     if(!expressionStatementNode) {
-//         //console.log('No expressionStatementNode found in ' + path);
-//         return;
-//     }
-//     // Now get its function node
-//     let callExpressionNode = expressionStatementNode.getChildren().find(n => n.kind === ts.SyntaxKind.CallExpression);
-//     if(!callExpressionNode) {
-//         //console.log('No callExpressionNode found in ' + path);
-//         return;
-//     }
-//
-//     // If there is a parameter, it should be removed.
-//     let parametersNode = callExpressionNode.getChildren().find(n =>n.kind === ts.SyntaxKind.SyntaxList);
-//     if(!parametersNode) {
-//         //console.log('No parameters node found in ' + path);
-//         return;
-//     }
-//     changes.push(new RemoveChange(path, parametersNode.pos, parametersNode.getFullText()));
-//
-//     let candidates = nodes.filter(n => n.kind===ts.SyntaxKind.PropertyAccessExpression
-//         && n.getText().search('initializeApp')===-1);
-//     for(let candidate of candidates) {
-//         if(candidate.getText() === fbFunctionsImportName+'.config().firebase'){
-//             // Do not change the initializeApp() function call
-//             if(candidate.parent && candidate.parent.parent && candidate.parent.parent.getText().search('initializeApp')>-1) {
-//                 continue;
-//             }
-//             let spaceOrNoSpace = '';
-//             if(candidate.getFullText()[0] === ' ') {
-//                 spaceOrNoSpace = ' ';
-//             }
-//             changes.push(new ReplaceChange(path, candidate.pos, spaceOrNoSpace+fbFunctionsImportName+'.config().firebase', spaceOrNoSpace+'JSON.parse(process.env.FIREBASE_CONFIG)'));
-//         }
-//     }
-// }
+function rewriteInitializeApp(path: string): void {
+    // Get the sourcefile, nodes and the name of the firebase-functions and firebase-admin imports
+    const ast: ts.SourceFile = tsquery.ast(getSourceFile(path));
+    let fbFunctionsImportName = traversal.findImportAsName(ast, 'firebase-functions');
+    let fbAdminImportName = traversal.findImportAsName(ast, 'firebase-admin');
+    if(!fbFunctionsImportName || !fbAdminImportName) {
+        return;
+    }
 
-// function findEventNodes(nodes: ts.Node[], fbFunctionsImportName: string, regex?: RegExp): ts.Node[] {
-//     return nodes.filter(n =>
-//            n.kind === ts.SyntaxKind.CallExpression
-//         && n.getText().search(fbFunctionsImportName) > -1
-//         && (regex === undefined || n.getText().search(regex) > -1)
-//     );
-// }
+    // Remove deprecated use of functions.config().firebase as parameter in admin.initializeApp()
+    // First find a use of the initializeApp() function
+    let [parametersNode] = tsquery(ast,`ExpressionStatement:has([text="${fbAdminImportName}.initializeApp"]) CallExpression PropertyAccessExpression:last-child`);
+    if(!parametersNode) {
+        console.log('No parametersNode found in ' + path);
+        return;
+    }
+    changes.push(new RemoveChange(path, parametersNode.pos, parametersNode.getFullText()));
+
+    // Now replace remaining mentions of functions.config().firebase for process.env.FIREBASE_CONFIG
+    // TODO: Hier gaat het nog mis! //
+    let candidates = tsquery(ast,`PropertyAccessExpression:has([text="${fbFunctionsImportName}.config().firebase"])`);
+    if(!candidates) {
+        console.log('geen candidates!');
+        return
+    }
+    console.log('er zijn', candidates.length, 'candidates');
+    for(let candidate of candidates) {
+        if(candidate.getText() === fbFunctionsImportName+'.config().firebase') {
+            // Do not change the initializeApp() function call
+            if(candidate.parent && candidate.parent.parent && candidate.parent.parent.getText().search('initializeApp')>-1) {
+                continue;
+            }
+            let spaceOrNoSpace = '';
+            if(candidate.getFullText()[0] === ' ') {
+                spaceOrNoSpace = ' ';
+            }
+            changes.push(new ReplaceChange(path, candidate.pos, spaceOrNoSpace+fbFunctionsImportName+'.config().firebase', spaceOrNoSpace+'JSON.parse(process.env.FIREBASE_CONFIG)'));
+        }
+    }
+    // TODO //
+}
 
 // function rewriteStorageOnChangeEvent(path: string): void {
 //     // Get the sourcefile, nodes and the name of the firebase-functions and firebase-admin imports
@@ -336,8 +313,8 @@ function readDir(path: string, fileExtension: string): Rule {
 
             // Build a changes array for this file and apply them one-by-one when finished
             else if (filename.endsWith(fileExtension)) {
-                // rewriteInitializeApp(`${path}/${filename}`);
                 rewriteEvents(`${path}/${filename}`);
+                rewriteInitializeApp(`${path}/${filename}`);
                 // rewriteStorageOnChangeEvent(`${path}/${filename}`);
 
                 applier.applyChanges(host, changes, <ts.Path>`${path}/${filename}`);
