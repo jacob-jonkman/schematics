@@ -1,5 +1,5 @@
 import * as fs from "fs";
-import * as ts from "../../node_modules/typescript/lib/typescript";
+import * as ts from "../node_modules/typescript/lib/typescript";
 
 function showTree(node: ts.Node, indent: string = '    '): void {
 

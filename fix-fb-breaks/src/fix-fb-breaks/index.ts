@@ -70,7 +70,6 @@ function rewriteEvents(path: string): void {
             eventParamNameToWrite = 'data';
         }
 
-        console.log('we gaan', eventParamName, 'omschrijven naar', eventParamNameToWrite);
         // Rewrite the event parameter. If the parameter list was not already between parentheses, they should be added
         if(arrowFunctionNode.getChildren().find(n => n.kind === ts.SyntaxKind.OpenParenToken)) {
             changes.push(new ReplaceChange(path, eventParamNode.pos, eventParamName, `${eventParamNameToWrite}, context`));
@@ -85,28 +84,9 @@ function rewriteEvents(path: string): void {
         let [eventBlockNode] = tsquery(arrowFunctionNode, 'Block');
         if(!eventBlockNode) continue;
 
-        let variableDeclarations = tsquery(eventBlockNode, `VariableStatement:has([text=${eventParamName}]) VariableDeclarationList VariableDeclaration`);
-
-        let variableStatements: TSQueryNode[] = [];
-        let variableNames: string[] = [];
-        variableDeclarations.forEach(v => {
-            const [identifier] = tsquery(v, 'Identifier');
-            console.log('var', identifier.getText());
-            if(identifier) variableNames.push(identifier.getText());
-
-            let [callExpression] = tsquery(v,  'CallExpression PropertyAccessExpression');
-            if(callExpression) {
-                variableStatements.push(callExpression);
-            } else {
-                let [propertyAccessExpression] = tsquery(v, 'PropertyAccessExpression');
-                if(propertyAccessExpression) variableStatements.push(propertyAccessExpression);
-            }
-
-        });
-
-        // TODO: Recursively find uses of variables using variableNames //
-
-        //let expressionStatements = tsquery(eventBlockNode, 'ExpressionStatement CallExpression');
+        const variableStatements = traversal.findVariableUses(eventBlockNode, eventParamName, eventBlockNode.pos, eventParamName);
+        console.log('We zijn klaar met findVariableUses. variableStatements (', variableStatements.length, 'elementen) ziet er nu zo uit:');
+        variableStatements.map(v => console.log('\t', v.getText()));
         iterateOverAssignments(fbNode, variableStatements, trigger, eventParamName, eventParamNameToWrite, path);
     }
 }
@@ -115,7 +95,6 @@ function iterateOverAssignments(fbNode: TSQueryNode, variableStatements: ts.Node
     // Construct the change objects
     variableStatements.forEach(assignment => {
         if(!assignment) {
-            console.log('assignment null');
             return;
         }
         const nodeText = assignment.getText();
@@ -163,7 +142,6 @@ function iterateOverAssignments(fbNode: TSQueryNode, variableStatements: ts.Node
 
 // Contains the trigger-specific changes of Firebase Realtime Database
 function fixDatabaseEvents(fbNode: TSQueryNode, nodeText: string, path: string, eventParamName: string, eventParamNameToWrite: string): string {
-    console.log('nodeText:', nodeText, 'eventParamName:', eventParamName);
     if(fbNode.getText().search(/onWrite|onUpdate/) > -1 && nodeText === `${eventParamName}.data.val`) {
         return `${eventParamNameToWrite}.after.val`;
     } else if(fbNode.getText().search(/onWrite|onUpdate/) > -1 && nodeText === `${eventParamName}.data.previous.val`) {
@@ -233,7 +211,6 @@ function rewriteInitializeApp(path: string): void {
         console.log('geen candidates!');
         return
     }
-    console.log('er zijn', candidates.length, 'candidates');
     for(let candidate of candidates) {
         if(candidate.getText() === fbFunctionsImportName+'.config().firebase') {
             // Do not change the initializeApp() function call
