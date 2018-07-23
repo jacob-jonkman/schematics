@@ -1,4 +1,4 @@
-import { chain, Rule, SchematicContext, SchematicsException, Tree } from '@angular-devkit/schematics';
+import { chain, Rule, SchematicContext, /*SchematicsException, */Tree } from '@angular-devkit/schematics';
 import { Change, ReplaceChange, RemoveChange } from '../schematics-angular-utils/change';
 import { FbBreaksOptions } from './fbBreaksOptions';
 import { tsquery } from '@phenomnomnominal/tsquery';
@@ -84,107 +84,105 @@ function rewriteEvents(path: string): void {
         let [eventBlockNode] = tsquery(arrowFunctionNode, 'Block');
         if(!eventBlockNode) continue;
 
-        const variableStatements = traversal.findVariableUses(trigger, eventBlockNode, eventParamName, eventBlockNode.pos, eventParamName, path);
-        console.log('We zijn klaar met findVariableUses. variableStatements (', variableStatements.length, 'elementen) ziet er nu zo uit:');
-        variableStatements.map(v => console.log('\t', v.getText()));
-        iterateOverAssignments(fbNode, variableStatements, trigger, eventParamName, eventParamNameToWrite, path);
+       changes = changes.concat(traversal.findVariableUses(trigger, eventBlockNode, eventParamName, eventBlockNode.pos, eventParamName, path));
+       //iterateOverAssignments(fbNode, variableStatements, trigger, eventParamName, eventParamNameToWrite, path);
     }
 }
 
-function iterateOverAssignments(fbNode: TSQueryNode, variableStatements: ts.Node[], trigger: string, eventParamName: string, eventParamNameToWrite: string, path: string): void {
-    // Construct the change objects
-    variableStatements.forEach(assignment => {
-        if(!assignment) {
-            return;
-        }
-        const nodeText = assignment.getText();
-
-        // If the parameter starts with a space, this should be added to the change object as well.
-        let spaceOrNoSpace = '';
-        if(assignment.getFullText()[0] === ' ') {
-            spaceOrNoSpace = ' ';
-        }
-
-        let changeString = '';
-
-        // Trigger-specific changes
-        if(trigger === 'database') {
-            changeString = fixDatabaseEvents(fbNode, nodeText, path, eventParamName, eventParamNameToWrite);
-        } else if (trigger === 'firestore') {
-            changeString = fixFirestoreEvents(fbNode, nodeText, eventParamName, eventParamNameToWrite);
-        } else if (trigger === 'auth') {
-            changeString = fixAuthEvents(nodeText, assignment, eventParamName);
-        }
-
-        // Trigger-unspecific changes
-        if(changeString === '') {
-            if (fbNode.getText().search(/onWrite|onUpdate/) > -1 && nodeText === `${eventParamName}.data.data`) {
-                changeString = `${eventParamNameToWrite}.after.data`;
-            } else if (nodeText === `${eventParamName}.data.adminRef.parent`) {
-                changeString = `${eventParamNameToWrite}.ref.parent`;
-            } else if (nodeText === `${eventParamName}.data`) {
-                changeString = `${eventParamNameToWrite}`;
-            } else if (nodeText === `${eventParamName}.params`) {
-                changeString = 'context.params';
-            }
-        }
-
-        if(changeString != '') {
-            changes.push(new ReplaceChange(
-                path,
-                assignment.pos,
-                spaceOrNoSpace+nodeText,
-                spaceOrNoSpace+changeString
-            ));
-        }
-    });
-}
-
-// Contains the trigger-specific changes of Firebase Realtime Database
-function fixDatabaseEvents(fbNode: TSQueryNode, nodeText: string, path: string, eventParamName: string, eventParamNameToWrite: string): string {
-    if(fbNode.getText().search(/onWrite|onUpdate/) > -1 && nodeText === `${eventParamName}.data.val`) {
-        return `${eventParamNameToWrite}.after.val`;
-    } else if(fbNode.getText().search(/onWrite|onUpdate/) > -1 && nodeText === `${eventParamName}.data.previous.val`) {
-        return `${eventParamNameToWrite}.before.val`;
-    } else if (fbNode.getText().search(/onCreate/) > -1 && nodeText === `${eventParamName}.data.val`){
-        return `${eventParamNameToWrite}.val`;
-    } else if(fbNode.getText().search(/onDelete/) > -1 && nodeText === `${eventParamName}.data.previous.val`) {
-        return `${eventParamNameToWrite}.val`;
-    } else if(nodeText === `${eventParamName}.data.ref.parent`) {
-        throw new SchematicsException(`Use of deprecated variable event.data.ref.parent was found in file ${path}. The use of this statement is too context sensitive so please remove it by hand.`);
-    }
-    return '';
-}
-
-// Contains the trigger-specific changes of Firebase Firestore
-function fixFirestoreEvents(fbNode: TSQueryNode, nodeText: string, eventParamName: string, eventParamNameToWrite: string): string {
-    if(fbNode.getText().search(/onWrite|onUpdate/) > -1 && nodeText === `${eventParamName}.data.data`) {
-        return `${eventParamNameToWrite}.after.data`;
-        //return nodeText.replace(`${eventParamName}.data`, `${eventParamNameToWrite}.after.data`);
-    } else if(fbNode.getText().search(/onWrite|onUpdate/) > -1 && nodeText === `${eventParamName}.data.previous.data`) {
-        return nodeText.replace(`${eventParamName}.data.previous.data`, `${eventParamNameToWrite}.before.data`);//.replace(`${eventParamName}.`, '');
-    } else if(fbNode.getText().search(/onCreate|onDelete/) > -1 && nodeText === `${eventParamName}.data.previous.data`) {
-        return `${eventParamNameToWrite}.data`;
-    }
-    return '';
-}
-
-// Contains the trigger-specific changes of Firebase Auth
-function fixAuthEvents(nodeText: string, assignmentNode: ts.Node, eventParamName: string): string {
-    //console.log(nodeText);
-    if(nodeText.search(/lastSignedInAt|createdAt/) > -1) {
-        let identifierNode = assignmentNode.getLastToken();
-        if(identifierNode.kind === ts.SyntaxKind.Identifier) {
-            if(identifierNode.getText() === 'lastSignedInAt') {
-                return nodeText.replace('lastSignedInAt','lastSignInTime').replace(`${eventParamName}.`, '');
-            }
-            else if(identifierNode.getText() === 'createdAt') {
-                return nodeText.replace('createdAt', 'creationTime').replace(`${eventParamName}.`, '');
-            }
-        }
-    }
-    return '';
-}
+// function iterateOverAssignments(fbNode: TSQueryNode, variableStatements: ts.Node[], trigger: string, eventParamName: string, eventParamNameToWrite: string, path: string): void {
+//     // Construct the change objects
+//     variableStatements.forEach(assignment => {
+//         if(!assignment) {
+//             return;
+//         }
+//         const nodeText = assignment.getText();
+//
+//         // If the parameter starts with a space, this should be added to the change object as well.
+//         let spaceOrNoSpace = '';
+//         if(assignment.getFullText()[0] === ' ') {
+//             spaceOrNoSpace = ' ';
+//         }
+//
+//         let changeString = '';
+//
+//         // Trigger-specific changes
+//         if(trigger === 'database') {
+//             changeString = fixDatabaseEvents(fbNode, nodeText, path, eventParamName, eventParamNameToWrite);
+//         } else if (trigger === 'firestore') {
+//             changeString = fixFirestoreEvents(fbNode, nodeText, eventParamName, eventParamNameToWrite);
+//         } else if (trigger === 'auth') {
+//             changeString = fixAuthEvents(nodeText, assignment, eventParamName);
+//         }
+//
+//         // Trigger-unspecific changes
+//         if(changeString === '') {
+//             if (fbNode.getText().search(/onWrite|onUpdate/) > -1 && nodeText === `${eventParamName}.data.data`) {
+//                 changeString = `${eventParamNameToWrite}.after.data`;
+//             } else if (nodeText === `${eventParamName}.data.adminRef.parent`) {
+//                 changeString = `${eventParamNameToWrite}.ref.parent`;
+//             } else if (nodeText === `${eventParamName}.data`) {
+//                 changeString = `${eventParamNameToWrite}`;
+//             } else if (nodeText === `${eventParamName}.params`) {
+//                 changeString = 'context.params';
+//             }
+//         }
+//
+//         if(changeString != '') {
+//             changes.push(new ReplaceChange(
+//                 path,
+//                 assignment.pos,
+//                 spaceOrNoSpace+nodeText,
+//                 spaceOrNoSpace+changeString
+//             ));
+//         }
+//     });
+// }
+//
+// // Contains the trigger-specific changes of Firebase Realtime Database
+// function fixDatabaseEvents(fbNode: TSQueryNode, nodeText: string, path: string, eventParamName: string, eventParamNameToWrite: string): string {
+//     if(fbNode.getText().search(/onWrite|onUpdate/) > -1 && nodeText === `${eventParamName}.data.val`) {
+//         return `${eventParamNameToWrite}.after.val`;
+//     } else if(fbNode.getText().search(/onWrite|onUpdate/) > -1 && nodeText === `${eventParamName}.data.previous.val`) {
+//         return `${eventParamNameToWrite}.before.val`;
+//     } else if (fbNode.getText().search(/onCreate/) > -1 && nodeText === `${eventParamName}.data.val`){
+//         return `${eventParamNameToWrite}.val`;
+//     } else if(fbNode.getText().search(/onDelete/) > -1 && nodeText === `${eventParamName}.data.previous.val`) {
+//         return `${eventParamNameToWrite}.val`;
+//     } else if(nodeText === `${eventParamName}.data.ref.parent`) {
+//         throw new SchematicsException(`Use of deprecated variable event.data.ref.parent was found in file ${path}. The use of this statement is too context sensitive so please remove it by hand.`);
+//     }
+//     return '';
+// }
+//
+// // Contains the trigger-specific changes of Firebase Firestore
+// function fixFirestoreEvents(fbNode: TSQueryNode, nodeText: string, eventParamName: string, eventParamNameToWrite: string): string {
+//     if(fbNode.getText().search(/onWrite|onUpdate/) > -1 && nodeText === `${eventParamName}.data.data`) {
+//         return `${eventParamNameToWrite}.after.data`;
+//         //return nodeText.replace(`${eventParamName}.data`, `${eventParamNameToWrite}.after.data`);
+//     } else if(fbNode.getText().search(/onWrite|onUpdate/) > -1 && nodeText === `${eventParamName}.data.previous.data`) {
+//         return nodeText.replace(`${eventParamName}.data.previous.data`, `${eventParamNameToWrite}.before.data`);//.replace(`${eventParamName}.`, '');
+//     } else if(fbNode.getText().search(/onCreate|onDelete/) > -1 && nodeText === `${eventParamName}.data.previous.data`) {
+//         return `${eventParamNameToWrite}.data`;
+//     }
+//     return '';
+// }
+//
+// // Contains the trigger-specific changes of Firebase Auth
+// function fixAuthEvents(nodeText: string, assignmentNode: ts.Node, eventParamName: string): string {
+//     //console.log(nodeText);
+//     if(nodeText.search(/lastSignedInAt|createdAt/) > -1) {
+//         let identifierNode = assignmentNode.getLastToken();
+//         if(identifierNode.kind === ts.SyntaxKind.Identifier) {
+//             if(identifierNode.getText() === 'lastSignedInAt') {
+//                 return nodeText.replace('lastSignedInAt','lastSignInTime').replace(`${eventParamName}.`, '');
+//             }
+//             else if(identifierNode.getText() === 'createdAt') {
+//                 return nodeText.replace('createdAt', 'creationTime').replace(`${eventParamName}.`, '');
+//             }
+//         }
+//     }
+//     return '';
+// }
 
 function rewriteInitializeApp(path: string): void {
     // Get the sourcefile, nodes and the name of the firebase-functions and firebase-admin imports

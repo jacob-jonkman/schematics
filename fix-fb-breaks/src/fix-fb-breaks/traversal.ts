@@ -1,10 +1,7 @@
-//import { AstWalker } from './AstWalker';
-//import * as ts from 'typescript';
 import * as ts from 'typescript';
 import { tsquery } from '@phenomnomnominal/tsquery';
 import { TSQueryNode } from '@phenomnomnominal/tsquery/dist/src/tsquery-types';
 import { Change, NoopChange, ReplaceChange } from "../schematics-angular-utils/change";
-// import * as utils from 'tsutils';
 
 //export class Traversal {
 // export function astWalker(node: tsNode, walkerArray: AstWalker[]) {
@@ -62,11 +59,10 @@ export function findRecursiveChildNodes(node: ts.Node, nodeType: ts.SyntaxKind, 
  *           => 'var dat = event.data; var previous = dat.previous' gives varString: 'event.data.previous'
  *  @Returns - variableDeclarations: List of nodes in which the variable contained in variableName is used
  */
-export function findVariableUses(trigger: string, functionBlockNode: ts.Node, variableName: string, startingPos: number, varString: string, path: string): TSQueryNode[] {
+export function findVariableUses(trigger: string, functionBlockNode: ts.Node, variableName: string, startingPos: number, varString: string, path: string): Change[] {
     // Start by finding all variableStatements in this function containing the eventParamName ('event' by default)
     let variableDeclarations = tsquery(functionBlockNode, `VariableStatement:has([text=${variableName}]) VariableDeclarationList VariableDeclaration`);
     let variableExpressions = tsquery(functionBlockNode, `ExpressionStatement:has([text=${variableName}])`);
-    let variableUses: TSQueryNode[] = [];
     let changes: Change[] = [];
 
     const candidates = variableDeclarations.concat(variableExpressions);
@@ -80,13 +76,11 @@ export function findVariableUses(trigger: string, functionBlockNode: ts.Node, va
                     let parameters = tsquery(variableUse, `PropertyAccessExpression:has([text=${variableName}])`);
                     parameters.forEach(p => {
                         let paramString = varString.concat('.').concat(p.getText().split('.').slice(1).join('.'));
-                        changes = changes.concat(checkRewrite(trigger, p, paramString, path));
+                        changes = changes.concat(checkRewrite(trigger, 'onDelete', p, paramString, path));
                     });
-                    variableUses = variableUses.concat(parameters);
                 } else { // Simple CallExpression without parameters
                     let callString = varString.concat('.').concat(callExpression.getText().split('.').slice(1).join('.'));
-                    changes = changes.concat(checkRewrite(trigger, callExpression, callString, path));
-                    variableUses.push(callExpression);
+                    changes = changes.concat(checkRewrite(trigger, 'onDelete', callExpression, callString, path));
                 }
             } else { // VariableDeclaration, further recursion required
                 let propertyAccessExpressions = tsquery(variableUse, 'PropertyAccessExpression');
@@ -96,23 +90,31 @@ export function findVariableUses(trigger: string, functionBlockNode: ts.Node, va
                         let [newVarName, assignment] = variableUse.getText().split('=');
                         newVarName = newVarName.trim();
                         assignment = assignment.split('.')[1].trim();
-                        variableUses.push(propertyAccessExpression);
-                        variableUses = variableUses.concat(findVariableUses(trigger, functionBlockNode, newVarName, variableUse.pos, varString.concat('.').concat(assignment), path));
+                        let paramString = varString.concat('.').concat(assignment);
+                        changes = changes.concat(checkRewrite(trigger, 'onDelete', propertyAccessExpression, paramString, path));
+                        changes = changes.concat(findVariableUses(trigger, functionBlockNode, newVarName, variableUse.pos, paramString, path));
                     }
                 });
             }
         });
-    return variableUses;
+    return changes;
 }
 
-function checkRewrite(trigger: string, node: ts.Node, varString: string, path: string): Change {
-    console.log(node.getText(), varString);
-    if(trigger === 'database' && node.getText().search('previous') > -1 && node.getText().search('val') === -1) {
-        return new ReplaceChange(path, node.pos, 'previous', node.getText().replace('previous', varString.split('.').slice(-2, -1)[0]));
-    } else if(node.getText().search('previous') > -1 && node.getText().search('val') > -1) {
-        return new ReplaceChange(path, node.pos, 'previous.val', node.getText().replace('previous.val', 'val'));
+function checkRewrite(trigger: string, eventKind: string, node: ts.Node, varString: string, path: string): Change {
+    console.log('node:', node.getText(), 'varstring:', varString);
+    let nodeText = node.getFullText().replace('event.data', 'data').replace( 'event', 'data');
+    if (trigger === 'database') {
+        if(eventKind === 'onDelete') {
+            if (node.getText().search('previous') > -1 && node.getText().search('val') === -1) {
+                return new ReplaceChange(path, node.pos, node.getFullText(), nodeText.replace('.previous', ''));
+            } else if (node.getText().search('previous') > -1 && node.getText().search('val') > -1) {
+                return new ReplaceChange(path, node.pos, node.getFullText(), nodeText.replace('previous.val', 'val'));
+            } else {
+                return new ReplaceChange(path, node.pos, node.getFullText(), nodeText);
+            }
+        }
     }
-    return new NoopChange();
+    return new NoopChange;
 
 }
 // Recursively traverses the syntax tree downward searching for a specific list of nodetypes.
