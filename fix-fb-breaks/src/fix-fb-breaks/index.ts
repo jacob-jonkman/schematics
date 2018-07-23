@@ -84,7 +84,7 @@ function rewriteEvents(path: string): void {
         let [eventBlockNode] = tsquery(arrowFunctionNode, 'Block');
         if(!eventBlockNode) continue;
 
-        const variableStatements = traversal.findVariableUses(eventBlockNode, eventParamName, eventBlockNode.pos, eventParamName);
+        const variableStatements = traversal.findVariableUses(trigger, eventBlockNode, eventParamName, eventBlockNode.pos, eventParamName, path);
         console.log('We zijn klaar met findVariableUses. variableStatements (', variableStatements.length, 'elementen) ziet er nu zo uit:');
         variableStatements.map(v => console.log('\t', v.getText()));
         iterateOverAssignments(fbNode, variableStatements, trigger, eventParamName, eventParamNameToWrite, path);
