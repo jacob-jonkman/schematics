@@ -1,5 +1,5 @@
-import { chain, Rule, SchematicContext, /*SchematicsException, */Tree } from '@angular-devkit/schematics';
-import { Change, NoopChange, ReplaceChange/*, RemoveChange*/ } from '../schematics-angular-utils/change';
+import { chain, Rule, SchematicContext, SchematicsException, Tree } from '@angular-devkit/schematics';
+import { Change, InsertChange, NoopChange, RemoveChange, ReplaceChange } from '../schematics-angular-utils/change';
 import { FbBreaksOptions } from './fbBreaksOptions';
 import { tsquery } from '@phenomnomnominal/tsquery';
 import { TSQueryNode } from '@phenomnomnominal/tsquery/dist/src/tsquery-types'
@@ -9,7 +9,6 @@ import * as applier from './ChangeApplyer';
 import { Traversal } from './traversal';
 
 let traversal = new Traversal();
-//let changes: Change[] = []; // The list of changes which is passed to ChangeApplier
 const eventTypes: string[] = ['onCreate', 'onWrite', 'onUpdate', 'onDelete', 'onChange', 'onNewDetected'];
 const triggers: string[] = ['database', 'firestore', 'auth', 'crashlytics', 'storage'];
 
@@ -58,6 +57,7 @@ function rewriteEvents(path: string): Change[] {
     if(!fbFunctionsImportName) {
         return changes;
     }
+    traversal.path = path;
 
     let firebaseFunctionNodes: TSQueryNode[] = [];
     for(let type of eventTypes) {
@@ -66,10 +66,10 @@ function rewriteEvents(path: string): Change[] {
 
     // Iterate over these functions
     for (let fbNode of firebaseFunctionNodes) {
-        const trigger: string = getTriggerType(fbNode);
-        const eventType = getEventType(fbNode);
-        if(trigger === '' || eventType === '') {
-            console.log('trigger:', trigger, 'eventType:',  eventType);
+        traversal.trigger = getTriggerType(fbNode);
+        traversal.eventType = getEventType(fbNode);
+        if(traversal.trigger === '' || traversal.eventType === '') {
+            console.log('trigger:', traversal.trigger, 'eventType:',  traversal.eventType);
             continue;
         }
 
@@ -100,109 +100,111 @@ function rewriteEvents(path: string): Change[] {
         }
 
         // onNewDetected event of Crashlytics was renamed to onNew
-        if(trigger === 'crashlytics') changes.push(fixCrashlytics(fbNode, path));
+        if(traversal.trigger === 'crashlytics') changes.push(fixCrashlytics(fbNode, path));
 
         // Find the body (=SyntaxList) of the callback
         let [eventBlockNode] = tsquery(arrowFunctionNode, 'Block');
         if(!eventBlockNode) continue;
 
-       changes = changes.concat(traversal.findVariableUses(trigger, eventType, eventBlockNode, traversal.eventParamName, eventBlockNode.pos, traversal.eventParamName.split('.')[0], path));
+       changes = changes.concat(traversal.findVariableUses(eventBlockNode, traversal.eventParamName, eventBlockNode.pos, traversal.eventParamName.split('.')[0]));
     }
     return changes;
 }
 
-// function rewriteInitializeApp(_path: string): void {
+function rewriteInitializeApp(path: string): Change[] {
+    let changes: Change[] = [];
     // Get the sourcefile, nodes and the name of the firebase-functions and firebase-admin imports
-    // const ast: ts.SourceFile = tsquery.ast(getSourceFile(path));
-    // let fbFunctionsImportName = traversal.findImportAsName(ast, 'firebase-functions');
-    // let fbAdminImportName = traversal.findImportAsName(ast, 'firebase-admin');
-    // if(!fbFunctionsImportName || !fbAdminImportName) {
-    //     return;
-    // }
-    //
-    // // Remove deprecated use of functions.config().firebase as parameter in admin.initializeApp()
-    // // First find a use of the initializeApp() function
-    // let [parametersNode] = tsquery(ast,`ExpressionStatement:has([text="${fbAdminImportName}.initializeApp"]) CallExpression PropertyAccessExpression:last-child`);
-    // if(!parametersNode) {
-    //     console.log('No parametersNode found in ' + path);
-    //     return;
-    // }
-    // changes.push(new RemoveChange(path, parametersNode.pos, parametersNode.getFullText()));
-    //
-    // // Now replace remaining mentions of functions.config().firebase for process.env.FIREBASE_CONFIG
-    // // TODO: Hier gaat het nog mis! //
-    // let candidates = tsquery(ast,`PropertyAccessExpression:has([text="${fbFunctionsImportName}.config().firebase"])`);
-    // if(!candidates) {
-    //     console.log('geen candidates!');
-    //     return
-    // }
-    // for(let candidate of candidates) {
-    //     if(candidate.getText() === fbFunctionsImportName+'.config().firebase') {
-    //         // Do not change the initializeApp() function call
-    //         if(candidate.parent && candidate.parent.parent && candidate.parent.parent.getText().search('initializeApp')>-1) {
-    //             continue;
-    //         }
-    //         let spaceOrNoSpace = '';
-    //         if(candidate.getFullText()[0] === ' ') {
-    //             spaceOrNoSpace = ' ';
-    //         }
-    //         changes.push(new ReplaceChange(path, candidate.pos, spaceOrNoSpace+fbFunctionsImportName+'.config().firebase', spaceOrNoSpace+'JSON.parse(process.env.FIREBASE_CONFIG)'));
-    //     }
-    // }
-    // TODO //
-// }
+    const ast: ts.SourceFile = tsquery.ast(getSourceFile(path));
+    let fbFunctionsImportName = traversal.findImportAsName(ast, 'firebase-functions');
+    let fbAdminImportName = traversal.findImportAsName(ast, 'firebase-admin');
+    if(!fbFunctionsImportName || !fbAdminImportName) {
+        return changes;
+    }
 
-// function rewriteStorageOnChangeEvent(path: string): void {
-//     // Get the sourcefile, nodes and the name of the firebase-functions and firebase-admin imports
-//     const sourceFile = getSourceFile(path);
-//     if(!sourceFile) {
-//         throw new SchematicsException(`unknown sourcefile at ${path}`)
-//     }
-//     let nodes = getSourceNodes(sourceFile);
-//     let fbFunctionsImportName = traversal.findImportAsName(nodes, 'firebase-functions', path);
-//     if(!fbFunctionsImportName) {
-//         return;
-//     }
-//
-//     // Find event callbacks of storage.object().onChange
-//     let eventNodes = findEventNodes(nodes, fbFunctionsImportName, /storage.*onChange/);
-//     for(let eventNode of eventNodes) {
-//         // Change the name of the onChange event to onFinalize
-//         let eventNameNode = traversal.findSuccessor(eventNode, [ts.SyntaxKind.PropertyAccessExpression, ts.SyntaxKind.Identifier]);
-//         if(!eventNameNode) continue;
-//         changes.push(new ReplaceChange(path, eventNameNode.pos, eventNameNode.getFullText(), 'onFinalize'));
-//
-//         // Find the ExpressionStatement of this event.
-//         // This is where we will add new ExpressionStatements for the new event handlers.
-//         let expressionStatementNode = traversal.findParentNode(eventNode, ts.SyntaxKind.ExpressionStatement, /onChange/);
-//         if(!expressionStatementNode) continue;
-//
-//         // Now look for conditionals checking the resourceState property and extract their content to separate events.
-//         let ifNodes = traversal.findRecursiveChildNodes(eventNode, ts.SyntaxKind.IfStatement); // TODO: Dit gaat goed met else if, ook met else?
-//         for(let ifNode of ifNodes) {
-//             let resourceStateCheck = traversal.findSuccessor(ifNode, [ts.SyntaxKind.BinaryExpression/*, ts.SyntaxKind.StringLiteral*/]);
-//             if(!resourceStateCheck) {
-//                 console.log('resourceStateCheck is undefined!');
-//             } else if(/exists|not_exists/.test(resourceStateCheck.getText())) {
-//                 let blockNode = traversal.findSuccessor(ifNode, [ts.SyntaxKind.Block, ts.SyntaxKind.SyntaxList]);
-//                 if(!blockNode) continue;
-//
-//                 let toAdd = blockNode.getFullText();
-//                 let text = resourceStateCheck.getText();
-//
-//                 // Depending on text, generate different functions
-//                 if(text.search('\'not_exists\'') > -1) {
-//                     toAdd = '\n\nexports.fileDeleted = functions.storage.object().onDelete((object, context) => {' + toAdd + '\n});';
-//                 } else if(text.search('\'exists\'') > -1) {
-//                     toAdd = '\n\nexports.metadataUpdated = functions.storage.object().onMetadataUpdate((object, context) => {' + toAdd + '\n});';
-//                 }
-//                 // Remove the ifstatement from the onChange function and insert a new expressionStatement node
-//                 changes.push(new RemoveChange(path, ifNode.pos, ifNode.getFullText()));
-//                 changes.push(new InsertChange(path, expressionStatementNode.end+1, toAdd));
-//             }
-//         }
-//     }
-// }
+    // Remove deprecated use of functions.config().firebase as parameter in admin.initializeApp()
+    // First find a use of the initializeApp() function
+    let [parametersNode] = tsquery(ast,`ExpressionStatement:has([text="${fbAdminImportName}.initializeApp"]) CallExpression PropertyAccessExpression:last-child`);
+    if(!parametersNode) {
+        console.log('No parametersNode found in ' + path);
+        return changes;
+    }
+    changes.push(new RemoveChange(path, parametersNode.pos, parametersNode.getFullText()));
+
+    // Now replace remaining mentions of functions.config().firebase for process.env.FIREBASE_CONFIG
+    // TODO: Hier gaat het nog mis! //
+    let candidates = tsquery(ast,`PropertyAccessExpression:has([text="${fbFunctionsImportName}.config().firebase"])`);
+    if(!candidates) {
+        console.log('geen candidates!');
+        return changes;
+    }
+    for(let candidate of candidates) {
+        if(candidate.getText() === fbFunctionsImportName+'.config().firebase') {
+            // Do not change the initializeApp() function call
+            if(candidate.parent && candidate.parent.parent && candidate.parent.parent.getText().search('initializeApp')>-1) {
+                continue;
+            }
+            let spaceOrNoSpace = '';
+            if(candidate.getFullText()[0] === ' ') {
+                spaceOrNoSpace = ' ';
+            }
+            changes.push(new ReplaceChange(path, candidate.pos, spaceOrNoSpace+fbFunctionsImportName+'.config().firebase', spaceOrNoSpace+'JSON.parse(process.env.FIREBASE_CONFIG)'));
+        }
+    }
+    return changes;
+}
+
+function rewriteStorageOnChangeEvent(path: string): Change[] {
+    let changes: Change[] = [];
+    // Get the sourcefile, nodes and the name of the firebase-functions and firebase-admin imports
+    const ast: ts.SourceFile = tsquery.ast(getSourceFile(path));
+    if(!ast) {
+        throw new SchematicsException(`unknown sourcefile at ${path}`)
+    }
+    let fbFunctionsImportName = traversal.findImportAsName(ast, 'firebase-functions');
+    if(!fbFunctionsImportName) {
+        return changes;
+    }
+
+    // Find event callbacks of storage.object().onChange
+    let eventNodes = tsquery(ast, `CallExpression:has([text="${fbFunctionsImportName}"]):has([text="/storage"]):has([text="onChange"])`);
+    for(let eventNode of eventNodes) {
+        // Change the name of the onChange event to onFinalize
+        let eventNameNode = traversal.findSuccessor(eventNode, [ts.SyntaxKind.PropertyAccessExpression, ts.SyntaxKind.Identifier]);
+        if(!eventNameNode) continue;
+        changes.push(new ReplaceChange(path, eventNameNode.pos, eventNameNode.getFullText(), 'onFinalize'));
+
+        // Find the ExpressionStatement of this event.
+        // This is where we will add new ExpressionStatements for the new event handlers.
+        let expressionStatementNode = traversal.findParentNode(eventNode, ts.SyntaxKind.ExpressionStatement, /onChange/);
+        if(!expressionStatementNode) continue;
+
+        // Now look for conditionals checking the resourceState property and extract their content to separate events.
+        let ifNodes = tsquery(eventNode, 'IfStatement');
+        for(let ifNode of ifNodes) {
+            let resourceStateCheck = traversal.findSuccessor(ifNode, [ts.SyntaxKind.BinaryExpression/*, ts.SyntaxKind.StringLiteral*/]);
+            if(!resourceStateCheck) {
+                console.log('resourceStateCheck is undefined!');
+            } else if(/exists|not_exists/.test(resourceStateCheck.getText())) {
+                let blockNode = traversal.findSuccessor(ifNode, [ts.SyntaxKind.Block, ts.SyntaxKind.SyntaxList]);
+                if(!blockNode) continue;
+
+                let toAdd = blockNode.getFullText();
+                let text = resourceStateCheck.getText();
+
+                // Depending on text, generate different functions
+                if(text.search('\'not_exists\'') > -1) {
+                    toAdd = '\n\nexports.fileDeleted = functions.storage.object().onDelete((object, context) => {' + toAdd + '\n});';
+                } else if(text.search('\'exists\'') > -1) {
+                    toAdd = '\n\nexports.metadataUpdated = functions.storage.object().onMetadataUpdate((object, context) => {' + toAdd + '\n});';
+                }
+                // Remove the ifstatement from the onChange function and insert a new expressionStatement node
+                changes.push(new RemoveChange(path, ifNode.pos, ifNode.getFullText()));
+                changes.push(new InsertChange(path, expressionStatementNode.end+1, toAdd));
+            }
+        }
+    }
+    return changes;
+}
 
 function iterate(host: Tree, path: string, fileExtension: string) {
     console.log('pathhh:', path);
@@ -216,8 +218,8 @@ function iterate(host: Tree, path: string, fileExtension: string) {
         else if (filename.endsWith(fileExtension)) {
             let changes: Change[] = [];
             changes = changes.concat(rewriteEvents(`${path}/${filename}`));
-            // changes = changes.concat(rewriteInitializeApp(`${path}/${filename}`));
-            // rewriteStorageOnChangeEvent(`${path}/${filename}`);
+            changes = changes.concat(rewriteInitializeApp(`${path}/${filename}`));
+            changes = changes.concat(rewriteStorageOnChangeEvent(`${path}/${filename}`));
 
             applier.applyChanges(host, changes, <ts.Path>`${path}/${filename}`);
         }

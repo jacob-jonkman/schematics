@@ -20,8 +20,8 @@ exports.dbUpdate = functions.database.ref('/path').onUpdate(event => {
 
 exports.dbCreate = functions.database.ref('/path').onCreate(event => {
     const createdData = event.data.val(); // => data.val()
-    const parentRef = event.data.adminRef.parent; // The Database reference to the parent authorized with admin privileges.
-    console.log(createdData, parentRef);
+    //const parentRef = event.data.adminRef.parent; // The Database reference to the parent authorized with admin privileges.
+    console.log(createdData);
 });
 
 exports.dbDelete = functions.database.ref('/path').onDelete(event => {
