@@ -25,6 +25,7 @@
     "typescript": "^2.9.2"
   },
   "devDependencies": {
+    "@angular/cli": "^6.1.5",
     "tslint": "^5.10.0",
     "tsutils": "^2.27.0"
   }

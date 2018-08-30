@@ -9,6 +9,8 @@ export class Traversal {
     trigger: string;
     eventType: string;
     path: string;
+    previousChangePos: number;
+    previousChangeEnd: number;
 
     findImmediateChildNodes(node: ts.Node, nodeType: ts.SyntaxKind, regex: RegExp): ts.Node[] {
         return node.getChildren().filter(n => this.nodeIsOfType(n, nodeType) && (regex === undefined || n.getText().search(regex)));
@@ -28,40 +30,20 @@ export class Traversal {
         return nodes;
     }
 
-    handleVariableDeclaration(variableUse: TSQueryNode, varString: string, functionBlockNode: ts.Node): Change[] {
-        console.log('we hebben een variableDeclaration! text:', variableUse.getText());
-        let changes: Change[] = [];
-        const propertyAccessExpressions = tsquery(variableUse, 'PropertyAccessExpression');
-        propertyAccessExpressions
-            .filter((node, index) => this.noOverlappingNodes(node, index, propertyAccessExpressions))
-            .forEach(propertyAccessExpression => {
-                if (propertyAccessExpression) {
-                    let [newVarName, assignment] = variableUse.getText().split('=');
-                    newVarName = newVarName.trim();
-                    assignment = assignment.split('.')[1].trim();
-                    let paramString = varString.concat('.', assignment);
-                    changes = changes.concat(this.checkRewrite(propertyAccessExpression, paramString));
-                    changes.forEach(c => console.log('we gaan hem zo herschrijven:', c.description));
-                    changes = changes.concat(this.findVariableUses(functionBlockNode, newVarName, propertyAccessExpression.end, paramString));
-                }
-            });
-        return changes;
-    }
-
-    /*
-     *  Starting from functionBlockNode, find all uses of the variable contained in variableName
-     *  Calls
-     *  @Input - functionBlockNode: The BlockNode of this firebase function
-     *  @Input - variableName: The name of the variable whose usages we are looking for
-     *  @Input - startingPos: Nodes that have a pos field lower than this number should not be evaluated to prevent endless loops
-     *  @Input - varString: string of accessed object properties up to this variable without variable assignment names
-     *           => 'var dat = event.data; var previous = dat.previous' gives varString: 'event.data.previous'
-     *  @Returns - variableDeclarations: List of nodes in which the variable contained in variableName is used
-     */
+   /*
+    *  Starting from functionBlockNode, find all uses of the variable contained in variableName
+    *  Calls
+    *  @Input - functionBlockNode: The BlockNode of this firebase function
+    *  @Input - variableName: The name of the variable whose usages we are looking for
+    *  @Input - startingPos: Nodes that have a pos field lower than this number should not be evaluated to prevent endless loops
+    *  @Input - varString: string of accessed object properties up to this variable without variable assignment names
+    *           => 'var dat = event.data; var previous = dat.previous' gives varString: 'event.data.previous'
+    *  @Returns - variableDeclarations: List of nodes in which the variable contained in variableName is used
+    */
     findVariableUses(functionBlockNode: ts.Node, variableName: string, startingPos: number, varString: string): Change[] {
         // Start by finding all variableStatements in this function containing the eventParamName ('event' by default)
         let changes: Change[] = [];
-        const candidates = [
+        const candidates: TSQueryNode[] = [
             tsquery(functionBlockNode, `VariableStatement:has([text=${variableName}]) VariableDeclarationList VariableDeclaration`),
             tsquery(functionBlockNode, `ExpressionStatement:has([text=${variableName}])`),
             tsquery(functionBlockNode, `IfStatement:has([text=${variableName}])`),
@@ -76,33 +58,54 @@ export class Traversal {
                 if(variableUse.kind === ts.SyntaxKind.VariableDeclaration) {
                     changes = changes.concat(this.handleVariableDeclaration(variableUse, varString, functionBlockNode));
                 }
+                // CallExpression, no further recursion
                 else {
-                    let [callExpression] = tsquery(variableUse, 'CallExpression');
-                    if (callExpression) { // CallExpression, no further recursion
-                        //console.log('we hebben een callExpression');
-                        // ExpressionStatements can be function calls with (multiple) parameters. If call has parameters, it is dubbed an ExpressionStatement
-                        if (variableUse.kind === ts.SyntaxKind.ExpressionStatement) {
-                            let parameters = tsquery(variableUse, `PropertyAccessExpression:has([text=${variableName}])`);
-                            parameters
-                                .filter((p, index) => (index === 0 || p.end > parameters[index - 1].end))
-                                .forEach(p => {
-                                    let paramString = varString.concat('.').concat(p.getText().split('.').slice(1).join('.'));
-                                    changes = changes.concat(this.checkRewrite(p, paramString));
-                                });
-                        } else { // Simple CallExpression without parameters
-                            let callString = varString.concat('.').concat(callExpression.getText().split('.').slice(1).join('.'));
-                            changes = changes.concat(this.checkRewrite(callExpression, callString));
-                        }
-                    }
-                    else {
-                        console.log('wat hebben we dan wel?', ts.SyntaxKind[variableUse.kind], variableUse.getText());
-                    }
+                    changes = changes.concat(this.handleCallExpression(variableUse, variableName, varString));
                 }
             });
         return changes;
     }
 
+    handleVariableDeclaration(variableUse: TSQueryNode, varString: string, functionBlockNode: ts.Node): Change[] {
+        let changes: Change[] = [];
+        const propertyAccessExpressions = tsquery(variableUse, 'PropertyAccessExpression');
+        propertyAccessExpressions
+            .filter((node, index) => this.noOverlappingNodes(node, index, propertyAccessExpressions))
+            .forEach(propertyAccessExpression => {
+                let [newVarName, assignment] = variableUse.getText().split('=');
+                newVarName = newVarName.trim();
+                assignment = assignment.split('.')[1].trim();
+                let paramString = varString.concat('.', assignment);
+                changes = changes.concat(this.checkRewrite(propertyAccessExpression, paramString));
+                changes = changes.concat(this.findVariableUses(functionBlockNode, newVarName, propertyAccessExpression.end, paramString));
+            });
+        return changes;
+    }
+
+    handleCallExpression(variableUse: TSQueryNode, variableName: string, varString: string): Change[] {
+        let changes: Change[] = [];
+        // ExpressionStatements can be function calls with (multiple) parameters. If call has parameters, it is dubbed an ExpressionStatement
+        if (variableUse.kind === ts.SyntaxKind.ExpressionStatement) {
+            let parameters = tsquery(variableUse, `PropertyAccessExpression:has([text=${variableName}])`);
+            parameters
+                .filter((p, index) => (index === 0 || p.end > parameters[index - 1].end))
+                .forEach(p => {
+                    let paramString = varString.concat('.').concat(p.getText().split('.').slice(1).join('.'));
+                    changes = changes.concat(this.checkRewrite(p, paramString));
+                });
+        } else { // Simple CallExpression without parameters
+            let [callExpression] = tsquery(variableUse, 'CallExpression');
+            let callString = varString.concat('.').concat(callExpression.getText().split('.').slice(1).join('.'));
+            changes = changes.concat(this.checkRewrite(callExpression, callString));
+        }
+        return changes;
+    }
+
     checkRewrite(node: ts.Node, _varString: string): Change {
+        if(node.pos >= this.previousChangePos && node.end <= this.previousChangeEnd) {
+            console.log('Node valt binnen de laatst gemaakte change. Geen verdere changes nodig.');
+            return new NoopChange();
+        }
         let nodeText = node.getFullText()
             .replace(`${this.eventParamName}.data`, this.eventParamNameToWrite)
             .replace(`${this.eventParamName}.params`, `context.params`)
@@ -112,19 +115,14 @@ export class Traversal {
             if(this.eventType === 'onCreate') {
 
             } else if(this.eventType === 'onWrite' || this.eventType === 'onUpdate') {
-                console.log('onupdate');
                 nodeText = nodeText
                     .replace('previous', 'before')
                     .replace('data.val', 'data.after.val');
-                console.log('achteraf is nodetext=', nodeText);
             } else if (this.eventType === 'onDelete') {
                 nodeText = nodeText
                     .replace('previous.val', 'val')
                     .replace('.previous', '');
-            } else {
-                return new NoopChange();
             }
-            return new ReplaceChange(this.path, node.pos, node.getFullText(), nodeText);
         } else if (this.trigger === 'firestore') {
             if (this.eventType === 'onCreate' || this.eventType === 'onDelete') {
                 nodeText = nodeText.replace('.previous', '');
@@ -132,19 +130,21 @@ export class Traversal {
                 nodeText = nodeText
                     .replace('previous', 'before')
                     .replace(`${this.eventParamNameToWrite}.data`, `${this.eventParamNameToWrite}.after.data`);
-            } else {
-                return new NoopChange();
             }
-            return new ReplaceChange(this.path, node.pos, node.getFullText(), nodeText);
         } else if (this.trigger === 'auth') {
             nodeText = nodeText
                 .replace('createdAt', 'creationTime')
                 .replace('lastSignedInAt', 'lastSignInTime');
-            return new ReplaceChange(this.path, node.pos, node.getFullText(), nodeText);
         }
-        return new NoopChange();
-
+        if(nodeText !== node.getText()) {
+            this.previousChangeEnd = node.end;
+            this.previousChangePos = node.pos;
+            return new ReplaceChange(this.path, node.pos, node.getFullText(), nodeText);
+        } else {
+            return new NoopChange();
+        }
     }
+
     // Recursively traverses the syntax tree downward searching for a specific list of nodetypes.
     // The function only traverses downward when a match is found.
     findSuccessor(node: TSQueryNode, searchPath: ts.SyntaxKind[]): TSQueryNode | null | undefined {
