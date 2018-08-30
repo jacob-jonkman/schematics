@@ -50,9 +50,8 @@ function getEventType(sourceNode: TSQueryNode): string {
 
 function rewriteEvents(path: string): Change[] {
     // Get the sourcefile, nodes and the name of the firebase-functions import
-    let changes: Change[] = [];
-    //console.log('we gaan nu ', path, 'herschrijven');
     const ast: ts.SourceFile = tsquery.ast(getSourceFile(path));
+    let changes: Change[] = [];
     let fbFunctionsImportName = traversal.findImportAsName(ast, 'firebase-functions');
     if(!fbFunctionsImportName) {
         return changes;
@@ -68,16 +67,11 @@ function rewriteEvents(path: string): Change[] {
     for (let fbNode of firebaseFunctionNodes) {
         traversal.trigger = getTriggerType(fbNode);
         traversal.eventType = getEventType(fbNode);
-        if(traversal.trigger === '' || traversal.eventType === '') {
-            console.log('trigger:', traversal.trigger, 'eventType:',  traversal.eventType);
-            continue;
-        }
+        if(traversal.trigger === '' || traversal.eventType === '') continue;
 
         // Make sure function has a callback
         let [arrowFunctionNode] = tsquery(fbNode, 'ArrowFunction');
-        if (!arrowFunctionNode) {
-            continue;
-        }
+        if (!arrowFunctionNode) continue;
 
         // Get the parameterlist to rename the event parameter
         let [eventParamNode] = tsquery(arrowFunctionNode, 'Parameter Identifier');
@@ -106,7 +100,7 @@ function rewriteEvents(path: string): Change[] {
         let [eventBlockNode] = tsquery(arrowFunctionNode, 'Block');
         if(!eventBlockNode) continue;
 
-       changes = changes.concat(traversal.findVariableUses(eventBlockNode, traversal.eventParamName, eventBlockNode.pos, traversal.eventParamName.split('.')[0]));
+        changes = changes.concat(traversal.findVariableUses(eventBlockNode, traversal.eventParamName, eventBlockNode.pos, traversal.eventParamName.split('.')[0]));
     }
     return changes;
 }
@@ -207,7 +201,6 @@ function rewriteStorageOnChangeEvent(path: string): Change[] {
 }
 
 function iterate(host: Tree, path: string, fileExtension: string) {
-    console.log('pathhh:', path);
     let list = fs.readdirSync(path);
     for (let filename of list) {
         if (fs.lstatSync(`${path}/${filename}`).isDirectory() && filename !== 'node_modules') {
@@ -220,7 +213,6 @@ function iterate(host: Tree, path: string, fileExtension: string) {
             changes = changes.concat(rewriteEvents(`${path}/${filename}`));
             changes = changes.concat(rewriteInitializeApp(`${path}/${filename}`));
             changes = changes.concat(rewriteStorageOnChangeEvent(`${path}/${filename}`));
-
             applier.applyChanges(host, changes, <ts.Path>`${path}/${filename}`);
         }
     }
